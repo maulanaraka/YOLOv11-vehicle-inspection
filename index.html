@@ -203,7 +203,7 @@
         .review-table td {
             padding: 12px 15px;
             border-bottom: 1px solid #e2e8f0;
-            vertical-align: middle;
+            vertical-align: top; /* Changed to top for details below */
         }
 
         .review-table tr:hover {
@@ -211,10 +211,10 @@
         }
 
         .review-table img {
-            max-width: 150px; /* Smaller image in table */
+            max-width: 200px; /* Slightly larger image in table */
             height: auto;
             border-radius: 5px;
-            display: block; /* Ensures centering if needed */
+            display: block;
             margin: 0 auto;
         }
 
@@ -248,6 +248,17 @@
             cursor: not-allowed;
             transform: none;
             box-shadow: none;
+        }
+
+        /* Styles for toggled segmentation results within the table */
+        .hidden-details {
+            display: none;
+            padding: 20px;
+            background: #fdfdfd;
+            border-top: 1px solid #eee;
+            margin-top: 10px;
+            border-radius: 8px;
+            box-shadow: inset 0 2px 5px rgba(0,0,0,0.05);
         }
 
         /* --- Existing styles remain below --- */
@@ -298,16 +309,15 @@
 
         .parts-list {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr)); /* Adjusted for more compact view */
             gap: 15px;
             margin-top: 20px;
         }
 
         .part-item {
             display: flex;
-            justify-content: space-between;
             align-items: center;
-            padding: 15px;
+            padding: 10px; /* Reduced padding */
             background: #f7fafc;
             border-radius: 10px;
             border-left: 4px solid #cbd5e0;
@@ -326,13 +336,16 @@
         .part-name {
             font-weight: 600;
             color: #2d3748;
+            flex-grow: 1; /* Allows name to take available space */
         }
 
         .part-status {
-            padding: 6px 12px;
+            padding: 4px 8px; /* Smaller padding */
             border-radius: 6px;
-            font-size: 14px;
+            font-size: 12px; /* Smaller font */
             font-weight: 600;
+            white-space: nowrap; /* Prevent wrapping */
+            margin-right: 10px; /* Space between status and image */
         }
 
         .status-ok {
@@ -345,38 +358,15 @@
             color: #742a2a;
         }
 
+        .part-item img {
+            max-width: 100px; /* Slightly larger part images */
+            height: auto;
+            border-radius: 5px;
+        }
+
         .confirm-section {
-            margin-top: 30px;
-            padding: 20px;
-            background: #edf2f7;
-            border-radius: 10px;
-            text-align: center;
-        }
-
-        .confirm-btn {
-            background: linear-gradient(135deg, #48bb78, #38a169);
-            color: white;
-            padding: 15px 40px;
-            border: none;
-            border-radius: 10px;
-            font-size: 16px;
-            font-weight: 600;
-            cursor: pointer;
-            margin: 0 10px;
-            transition: all 0.3s ease;
-        }
-
-        .confirm-btn:hover {
-            transform: translateY(-2px);
-            box-shadow: 0 8px 20px rgba(72, 187, 120, 0.4);
-        }
-
-        .reject-btn {
-            background: linear-gradient(135deg, #f56565, #e53e3e);
-        }
-
-        .reject-btn:hover {
-            box-shadow: 0 8px 20px rgba(245, 101, 101, 0.4);
+            /* This section will be removed from display */
+            display: none;
         }
 
         .progress-bar {
@@ -624,9 +614,7 @@
                 </table>
             </div>
 
-            <div id="segmentationResultsDisplay" class="detection-results" style="display: none;">
-                <h3>Segmentation Results:</h3>
-                </div>
+            <div id="segmentationResultsDisplay" style="display: none;"></div> 
         </div>
 
         <div id="reports" class="tab-content">
@@ -678,7 +666,6 @@
         const API_BASE = 'http://localhost:5000';
         let socket = null;
         let currentDetectionId = null;
-        let detectionResultsMemory = {}; 
         let cameraActive = false;
         let mediaStream = null; 
         let lastCapturedCarInfo = null; // Stores info about the car captured by camera tracking
@@ -755,7 +742,9 @@
             });
 
             socket.on('segmentation_complete', (data) => {
-                handleSegmentationComplete(data);
+                // This event might not be directly used anymore if segmentation is triggered by API call
+                // and result is handled in startSegmentation's fetch().then()
+                console.log('Segmentation complete via Socket.IO (might be deprecated):', data);
             });
         }
 
@@ -856,19 +845,22 @@
             if (data.detection_id !== currentDetectionId) return;
             
             document.getElementById('progressText').textContent = 'Video processing completed!';
-            detectionResultsMemory[data.detection_id] = data.results; 
             
             // Add all segmented cars from video to carsForReview array
             Object.entries(data.results).forEach(([carKey, carData]) => {
-                carsForReview.push({
-                    id: carData.id,
-                    detection_id: data.detection_id,
-                    car_key: carKey,
-                    car_image_path: carData.car_image_path,
-                    segmented: true, // Mark as already segmented
-                    segmentation_results: carData, // Store full results
-                    status: 'Done' // Explicitly set status for segmented video cars
-                });
+                const carDbId = `${data.detection_id}_${carKey}`;
+                // Check if car already exists to prevent duplicates on refresh/re-load
+                if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbId)) {
+                    carsForReview.push({
+                        id: carData.id,
+                        detection_id: data.detection_id,
+                        car_key: carKey,
+                        car_image_path: carData.car_image_path,
+                        segmented: true, // Mark as already segmented
+                        segmentation_results: carData, // Store full results
+                        status: 'Done' // Explicitly set status for segmented video cars
+                    });
+                }
             });
 
             showNotification('Video detection completed successfully! Results available in Review tab.', 'success');
@@ -993,7 +985,6 @@
                 showNotification('Car captured! Review or restart detection.', 'info');
                 
                 // Add the newly captured (unsegmented) car to the review array
-                // Only add if it's not already in carsForReview (e.g., from a fresh video upload)
                 const carDbIdForNewCapture = `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}`;
                 if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForNewCapture)) {
                     carsForReview.push({
@@ -1035,10 +1026,7 @@
             const reviewInitialPrompt = document.getElementById('reviewInitialPrompt');
             const reviewTableContainer = document.getElementById('reviewTableContainer');
             const reviewTableBody = document.getElementById('reviewTableBody');
-            const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
-
-            segmentationResultsDisplay.style.display = 'none'; 
-            segmentationResultsDisplay.innerHTML = ''; 
+            
             reviewTableBody.innerHTML = ''; // Clear existing rows
 
             if (carsForReview.length === 0) {
@@ -1047,37 +1035,54 @@
                 return;
             }
 
+            // Sort carsForReview to ensure consistent order (e.g., by detection_id then car_key)
+            carsForReview.sort((a, b) => {
+                const idA = `${a.detection_id}_${a.car_key}`;
+                const idB = `${b.detection_id}_${b.car_key}`;
+                return idA.localeCompare(idB);
+            });
+
+
             reviewInitialPrompt.style.display = 'none';
             reviewTableContainer.style.display = 'block';
 
             carsForReview.forEach(carData => { // Iterate through carsForReview
-                const row = document.createElement('tr');
                 const carDbId = `${carData.detection_id}_${carData.car_key}`;
                 
                 let actionButtonsHtml = '';
-                let statusText = carData.status || 'Unknown'; // Use carData.status if set, else 'Unknown'
+                let statusText = carData.status || 'Unknown'; 
+                let detailsHtml = '';
 
                 if (carData.segmented) {
                     actionButtonsHtml = `
-                        <button class="action-btn view-results-btn" onclick="viewSegmentationResults('${carDbId}')">View Results</button>
+                        <button class="action-btn view-results-btn" onclick="toggleSegmentationResults('${carDbId}')">View Results</button>
                         <button class="action-btn restart-seg-btn" onclick="restartSegmentation('${carDbId}')">Restart Segmentation</button>
                     `;
-                    statusText = 'Done'; // Set status to 'Done' if segmented
+                    statusText = 'Done'; 
+                    detailsHtml = `
+                        <tr id="details_row_${carDbId}" class="hidden-details">
+                            <td colspan="4">${createCarCardHtml(carData.car_key, carData.segmentation_results, carData.detection_id)}</td>
+                        </tr>
+                    `;
                 } else {
                     actionButtonsHtml = `
                         <button class="action-btn start-seg-btn" onclick="startSegmentation('${carDbId}')" id="segmentBtn_${carDbId}">Start Segmentation</button>
                     `;
-                    statusText = 'Captured'; // Explicitly set for unsegmented captures
+                    statusText = 'Captured'; 
                 }
                 actionButtonsHtml += `<button class="action-btn delete-btn" onclick="deleteCarFromReview('${carDbId}')">Delete</button>`;
 
-                row.innerHTML = `
+                const mainRow = document.createElement('tr');
+                mainRow.innerHTML = `
                     <td>${carData.id}</td>
                     <td><img src="/${carData.car_image_path}" alt="Car ID ${carData.id}"></td>
                     <td id="status_${carDbId}">${statusText}</td>
                     <td class="action-buttons" id="actions_${carDbId}">${actionButtonsHtml}</td>
                 `;
-                reviewTableBody.appendChild(row);
+                reviewTableBody.appendChild(mainRow);
+                if (detailsHtml) {
+                    reviewTableBody.insertAdjacentHTML('beforeend', detailsHtml);
+                }
             });
         }
 
@@ -1115,7 +1120,8 @@
                     showNotification('Segmentation completed successfully!', 'success');
                     
                     carToSegment.segmented = true;
-                    Object.assign(carToSegment, { segmentation_results: result.results[carToSegment.car_key] });
+                    // Ensure the segmentation_results are directly assigned to the car object
+                    carToSegment.segmentation_results = result.results[carToSegment.car_key];
                     carToSegment.status = 'Done'; 
 
                     if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
@@ -1123,8 +1129,10 @@
                          localStorage.removeItem('lastCapturedCarInfo');
                     }
 
-                    displayReviewArea(); 
-                    viewSegmentationResults(carDbId); 
+                    displayReviewArea(); // Re-render the review table to show "View Results" button and details row
+                    // Automatically show the results after segmentation
+                    toggleSegmentationResults(carDbId, true); 
+
                 } else {
                     throw new Error(result.error || 'Segmentation failed');
                 }
@@ -1144,7 +1152,7 @@
             if (index !== -1) {
                 carsForReview.splice(index, 1);
                 showNotification('Car removed from review list.', 'info');
-                displayReviewArea();
+                displayReviewArea(); // Re-render the table
                 
                 if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
                     lastCapturedCarInfo = null;
@@ -1155,32 +1163,25 @@
             }
         }
 
-        function viewSegmentationResults(carDbId) {
-            const car = carsForReview.find(c => `${c.detection_id}_${c.car_key}` === carDbId);
-            const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
-            
-            if (!car || !car.segmented || !car.segmentation_results) {
-                showNotification('Segmentation results not available for this car.', 'error');
-                segmentationResultsDisplay.style.display = 'none';
-                return;
+        function toggleSegmentationResults(carDbId, forceShow = false) {
+            const detailsRow = document.getElementById(`details_row_${carDbId}`);
+            if (detailsRow) {
+                if (forceShow || detailsRow.style.display === 'none' || detailsRow.style.display === '') {
+                    detailsRow.style.display = 'table-row';
+                    detailsRow.classList.add('fade-in');
+                    // Scroll to the revealed details
+                    detailsRow.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+                } else {
+                    detailsRow.style.display = 'none';
+                    detailsRow.classList.remove('fade-in');
+                }
             }
-
-            segmentationResultsDisplay.innerHTML = ''; 
-            segmentationResultsDisplay.style.display = 'block';
-
-            const carCard = createCarCard(car.car_key, car.segmentation_results, car.detection_id);
-            segmentationResultsDisplay.appendChild(carCard);
-
-            segmentationResultsDisplay.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
 
+        // Renamed from createCarCard to createCarCardHtml as it now returns HTML string
+        function createCarCardHtml(carKey, carData, detectionId) {
+            if (!carData) return 'No segmentation results available for this car.';
 
-        function createCarCard(carKey, carData, detectionId) {
-            const card = document.createElement('div');
-            card.className = 'car-card fade-in';
-            const carDbId = `${detectionId}_${carKey}`;
-            card.setAttribute('data-car-db-id', carDbId);
-            
             const conditionClass = carData.condition >= 80 ? 'condition-good' : 
                                   carData.condition >= 60 ? 'condition-fair' : 'condition-poor';
             
@@ -1189,77 +1190,28 @@
                     <span class="part-name">${partData.name.replace('_', ' ').toUpperCase()}</span>
                     <span class="part-status ${partData.status ? 'status-ok' : 'status-missing'}">
                         ${partData.status ? 'DETECTED' : 'NOT DETECTED'}
-                        ${partData.status && partData.confidence ? ` (${(partData.confidence * 100).toFixed(1)}%)` : ''}
                     </span>
-                    ${partData.image_path ? `<img src="/${partData.image_path}" alt="${partData.name}" style="max-width: 80px; height: auto; border-radius: 5px; margin-left: 10px;">` : ''}
+                    ${partData.image_path ? `<img src="/${partData.image_path}" alt="${partData.name}">` : ''}
                 </div>
             `).join('');
             
-            card.innerHTML = `
-                <div class="car-header">
-                    <div class="car-id">Car ID: ${carData.id}</div>
-                    <div class="condition-percentage ${conditionClass}">
-                        ${carData.condition}%
+            return `
+                <div class="car-card fade-in" data-car-db-id="${detectionId}_${carKey}">
+                    <div class="car-header">
+                        <div class="car-id">Car ID: ${carData.id}</div>
+                        <div class="condition-percentage ${conditionClass}">
+                            ${carData.condition}%
+                        </div>
+                    </div>
+                    
+                    <div class="parts-list">
+                        ${partsHtml}
                     </div>
                 </div>
-                
-                <div class="parts-list">
-                    ${partsHtml}
-                </div>
-                
-                <div class="confirm-section">
-                    <h3>Confirm Detection Results</h3>
-                    <p>Please review the detection results and confirm if they are accurate.</p>
-                    <button class="confirm-btn" onclick="confirmCar('${carDbId}', true, this)">
-                        ✅ Confirm Results
-                    </button>
-                    <button class="confirm-btn reject-btn" onclick="confirmCar('${carDbId}', false, this)">
-                        ❌ Reject Results
-                    </button>
-                </div>
             `;
-            
-            return card;
         }
 
-        async function confirmCar(carDbId, isConfirmed, buttonElement) {
-            try {
-                const response = await fetch(`${API_BASE}/api/confirm-car`, {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json',
-                    },
-                    body: JSON.stringify({
-                        car_db_id: carDbId,
-                        confirmed: isConfirmed
-                    })
-                });
-
-                const result = await response.json();
-                
-                if (response.ok) {
-                    showNotification(result.message, 'success');
-                    const card = buttonElement.closest('.car-card');
-                    if (card) {
-                        const confirmSection = card.querySelector('.confirm-section');
-                        confirmSection.innerHTML = `
-                            <h3 style="color: ${isConfirmed ? '#38a169' : '#e53e3e'}">
-                                ${isConfirmed ? '✅ Results Confirmed' : '❌ Results Rejected'}
-                            </h3>
-                            <p>Action completed at ${new Date().toLocaleString()}</p>
-                        `;
-                    }
-                    if (isConfirmed) {
-                        // After confirming, we still want it to disappear from the review queue
-                        deleteCarFromReview(carDbId); 
-                    }
-                } else {
-                    throw new Error(result.error);
-                }
-            } catch (error) {
-                showNotification('Confirmation failed: ' + error.message, 'error');
-            }
-        }
+        // Removed confirmCar function as per requirement
 
         // --- Reports Tab Functions ---
         async function loadReports() {
@@ -1355,14 +1307,16 @@
                     
                     carsFromReport.forEach(carData => {
                         // Reconstruct object for carsForReview format
-                        const carKeyFromId = carData.car_image_path.split('_')[2]; // Extract car_key from image path heuristic
+                        // The car_key is the last segment of the car_db_id (e.g., "car_3")
+                        const carKeyFromCarDbId = carData.car_image_path.split('/').pop().split('_')[2]; 
+
                         carsForReview.push({
                             id: carData.id,
-                            detection_id: detectionId, // Use the fetched detectionId
-                            car_key: carKeyFromId, // Use the extracted car_key
+                            detection_id: detectionId, 
+                            car_key: carKeyFromCarDbId, 
                             car_image_path: carData.car_image_path,
-                            segmented: true, // Cars from detailed report are always segmented
-                            segmentation_results: carData, // Store the full car data from report
+                            segmented: true, 
+                            segmentation_results: carData, 
                             status: 'Done' 
                         });
                     });
@@ -1370,11 +1324,11 @@
                     showTab('review'); // Switch to the review tab
                     // displayReviewArea() is called by showTab('review') and will render the new carsForReview array.
 
-                    // Automatically display results of the first car if there are any
-                    if (carsForReview.length > 0) {
-                        const firstCarDbId = `${carsForReview[0].detection_id}_${carsForReview[0].car_key}`;
-                        viewSegmentationResults(firstCarDbId);
-                    }
+                    // No longer automatically display results of the first car, user will toggle
+                    // if (carsForReview.length > 0) {
+                    //     const firstCarDbId = `${carsForReview[0].detection_id}_${carsForReview[0].car_key}`;
+                    //     toggleSegmentationResults(firstCarDbId, true); // Automatically show the first one
+                    // }
 
                 } else {
                     throw new Error(result.error || 'Failed to load detection details');
@@ -1393,7 +1347,7 @@
             if (storedCarInfo) {
                 lastCapturedCarInfo = JSON.parse(storedCarInfo);
                 const carDbIdForExistingCapture = `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}`;
-                // Only add if it's not already in carsForReview (e.g., from a fresh video upload)
+                // Only add if it's not already in carsForReview (e.g., from a fresh video upload or previous session)
                 if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForExistingCapture)) {
                     carsForReview.push({
                         id: lastCapturedCarInfo.id,
