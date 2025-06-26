@@ -42,7 +42,7 @@ class Config:
         os.makedirs(directory, exist_ok=True)
 
 # Global variables
-detection_active = False
+detection_active = False # This primarily for camera/video
 camera_active = False
 current_detection_id = None
 models_loaded = False
@@ -263,9 +263,11 @@ class CarTrackingProcessor:
                     part_data.get("image_path") 
                 ))
             
-            cursor.execute('''
-                UPDATE detections SET status = 'processed', total_cars = ? WHERE id = ?
-            ''', (len(self.captured_cars_data) if self.source_type == 'video' else 1, self.detection_id))
+            # For camera captures, total_cars is dynamic. For image it's always 1.
+            # This is specific for video/camera, for image it's updated in upload_image
+            # cursor.execute('''
+            #     UPDATE detections SET status = 'processed', total_cars = ? WHERE id = ?
+            # ''', (len(self.captured_cars_data) if self.source_type == 'video' else 1, self.detection_id))
             
             conn.commit()
 
@@ -277,7 +279,7 @@ def index():
     <h1>Car Detection System API</h1>
     <p>Available endpoints:</p>
     <ul>
-        <li>POST /api/upload-video - Upload video for detection</li>
+        <li>POST /api/upload-image - Upload image for detection</li>
         <li>GET /api/camera/start - Start camera tracking (capture car)</li>
         <li>GET /api/camera/stop - Stop camera tracking</li>
         <li>POST /api/segment-captured-car - Run segmentation on captured car</li>
@@ -297,155 +299,135 @@ def serve_part_images(filename):
 def serve_car_images(filename):
     return send_from_directory(Config.CAR_IMG_DIR, filename)
 
+# Serve uploaded images (for the source_path if needed, or if stored in CAR_IMG_DIR directly)
+@app.route('/Result/API/uploads/<path:filename>')
+def serve_uploaded_images(filename):
+    return send_from_directory(Config.UPLOAD_FOLDER, filename)
 
-@app.route('/api/upload-video', methods=['POST'])
-def upload_video():
-    global detection_active, current_detection_id
-    
-    if detection_active:
-        return jsonify({"error": "Detection already in progress"}), 400
-    
+
+@app.route('/api/upload-image', methods=['POST'])
+def upload_image():
     if not load_models():
         return jsonify({"error": "Failed to load models"}), 500
-    
-    if 'video' not in request.files:
-        return jsonify({"error": "No video file provided"}), 400
-    
-    file = request.files['video']
+
+    if 'image' not in request.files:
+        return jsonify({"error": "No image file provided"}), 400
+
+    file = request.files['image']
     if file.filename == '':
         return jsonify({"error": "No file selected"}), 400
-    
+
     filename = f"{uuid.uuid4().hex}_{file.filename}"
     file_path = os.path.join(Config.UPLOAD_FOLDER, filename)
-    
+
     try:
         file.save(file_path)
     except Exception as e:
-        return jsonify({"error": f"Failed to save video file: {e}"}), 500
-    
-    current_detection_id = f"video_{int(time.time())}"
-    eventlet.spawn_n(process_video_detection_with_segmentation, current_detection_id, file_path)
-    
-    return jsonify({
-        "message": "Video uploaded successfully, processing started",
-        "detection_id": current_detection_id
-    })
+        return jsonify({"error": f"Failed to save image file: {e}"}), 500
 
-def process_video_detection_with_segmentation(detection_id, video_path):
-    global detection_active
-    detection_active = True
-    
-    try:
-        processor = CarTrackingProcessor(detection_id, "video", video_path) 
-        processor.save_detection_record(status='processing') 
-        
-        cap = cv2.VideoCapture(video_path)
-        
-        if not cap.isOpened():
-            socketio.emit('detection_error', {
-                'detection_id': detection_id,
-                'error': 'Cannot open video file'
-            })
-            return
+    detection_id = f"image_{int(time.time())}_{uuid.uuid4().hex[:6]}"
+    car_key = "car_1" # For single image, only one "car"
+    car_db_id = f"{detection_id}_{car_key}"
 
-        total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT))
-        
-        socketio.emit('detection_progress', {
-            'detection_id': detection_id,
-            'status': 'started',
-            'progress': 0,
-            'message': 'Tracking cars in video...'
-        })
-        
-        frame_count = 0
-        while True:
-            ret, frame = cap.read()
-            if not ret:
-                break
-            
-            processed_frame, captured_car_data_this_frame = processor.process_frame(frame) 
-            if captured_car_data_this_frame and captured_car_data_this_frame['car_key'] not in processor.captured_cars_data:
-                processor.captured_cars_data[captured_car_data_this_frame['car_key']] = captured_car_data_this_frame
+    # Insert initial detection record
+    with get_db_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute('''
+            INSERT INTO detections (id, timestamp, source_type, source_path, status, total_cars)
+            VALUES (?, ?, ?, ?, ?, ?)
+        ''', (
+            detection_id,
+            datetime.now().isoformat(),
+            "image",
+            file_path.replace('\\', '/'), # Store the uploaded file path
+            "processing",
+            1 # One car expected for single image
+        ))
+        conn.commit()
 
+    # Run segmentation on the uploaded image
+    # For a single image upload, car_id_int can be 1 as there's no tracking ID.
+    segmentation_result = run_segmentation_on_image(file_path, 1)
 
-            frame_count += 1
-            
-            if frame_count % 30 == 0 or frame_count == total_frames:
-                progress = min(100, (frame_count / total_frames) * 100)
-                socketio.emit('detection_progress', {
-                    'detection_id': detection_id,
-                    'status': 'tracking',
-                    'progress': progress,
-                    'message': f'Tracking {frame_count}/{total_frames} frames...',
-                    'current_tracked_cars_count': len(processor.captured_cars_data) 
-                })
-        
-        cap.release()
-        
-        captured_cars_list = list(processor.captured_cars_data.values())
-        final_results = {}
-
-        if not captured_cars_list:
-            print(f"[INFO] No cars captured in video {detection_id}.")
+    if segmentation_result:
+        try:
             with get_db_connection() as conn:
                 cursor = conn.cursor()
-                cursor.execute("UPDATE detections SET status = 'completed_no_cars' WHERE id = ?", (detection_id,))
+                
+                detected_count = sum(1 for p_data in segmentation_result['parts'].values() if p_data["status"] == 1)
+                total_parts = len(segmentation_result['parts'])
+
+                cursor.execute('''
+                    INSERT OR REPLACE INTO cars (id, detection_id, car_id, condition_percentage, car_image_path, detected_parts, total_parts, confirmed, confirmation_time)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    car_db_id,
+                    detection_id,
+                    1, # car_id
+                    segmentation_result['condition'],
+                    file_path.replace('\\', '/'), # Use the uploaded file path as car_image_path
+                    detected_count,
+                    total_parts,
+                    True, # Auto-confirm here for image uploads
+                    datetime.now().isoformat()
+                ))
+
+                # Clear existing parts for this car_db_id if it's an update (unlikely for new image)
+                cursor.execute('DELETE FROM parts WHERE car_db_id = ?', (car_db_id,))
+                
+                for part_name_key, part_data in segmentation_result['parts'].items():
+                    cursor.execute('''
+                        INSERT INTO parts (id, car_db_id, part_name, part_id, status, confidence, image_path)
+                        VALUES (?, ?, ?, ?, ?, ?, ?)
+                    ''', (
+                        f"{car_db_id}_{part_data['name']}_{uuid.uuid4().hex[:4]}",
+                        car_db_id,
+                        part_data["name"],
+                        part_name_key,
+                        part_data["status"],
+                        part_data["confidence"],
+                        part_data.get("image_path") # This image_path refers to the segmented part image
+                    ))
+                
+                # Update detection status to completed
+                cursor.execute('''
+                    UPDATE detections SET status = 'completed', total_cars = 1 WHERE id = ?
+                ''', (detection_id,))
+                
                 conn.commit()
-            socketio.emit('detection_complete', {
-                'detection_id': detection_id,
-                'status': 'completed',
-                'results': {},
-                'message': 'No cars detected in video.'
-            })
-            return 
 
-
-        for i, car_info in enumerate(captured_cars_list):
-            socketio.emit('detection_progress', {
-                'detection_id': detection_id,
-                'status': 'segmenting',
-                'progress': 100 + ((i + 1) / len(captured_cars_list)) * 100, 
-                'message': f'Segmenting car {i+1}/{len(captured_cars_list)}...'
-            })
-            img_path_for_seg = os.path.join(Config.CAR_IMG_DIR, os.path.basename(car_info['car_image_path'])).replace('\\', os.sep)
-            segmentation_result = run_segmentation_on_image(img_path_for_seg, car_info['id'])
-            
-            if segmentation_result:
-                car_db_id = f"{detection_id}_{car_info['car_key']}"
-                processor.update_car_and_parts_in_db(car_db_id, {
-                    'id': car_info['id'],
-                    'car_image_path': car_info['car_image_path'],
-                    **segmentation_result 
-                })
-                final_results[car_info['car_key']] = {
-                    'id': car_info['id'],
-                    'car_image_path': car_info['car_image_path'],
-                    'car_key': car_info['car_key'], # Include car_key here for frontend convenience
-                    'detection_id': detection_id, # Include detection_id
-                    **segmentation_result
+            return jsonify({
+                "message": "Image processed successfully",
+                "detection_id": detection_id,
+                "car_db_id": car_db_id,
+                "results": {
+                    car_key: {
+                        'id': 1, # car_id
+                        'car_image_path': file_path.replace('\\', '/'),
+                        'car_key': car_key,
+                        'detection_id': detection_id,
+                        **segmentation_result
+                    }
                 }
+            })
+        except Exception as e:
+            print(f"[ERROR] Failed to save image segmentation results to DB: {e}", exc_info=True)
+            with get_db_connection() as conn_err:
+                cursor_err = conn_err.cursor()
+                cursor_err.execute("UPDATE detections SET status = 'error' WHERE id = ?", (detection_id,))
+                conn_err.commit()
+            if os.path.exists(file_path):
+                os.remove(file_path) # Clean up uploaded image if not fully processed
+            return jsonify({"error": f"Failed to save segmentation results: {e}"}), 500
+    else:
+        with get_db_connection() as conn_err:
+            cursor_err = conn_err.cursor()
+            cursor_err.execute("UPDATE detections SET status = 'failed_segmentation' WHERE id = ?", (detection_id,))
+            conn_err.commit()
+        if os.path.exists(file_path):
+            os.remove(file_path) # Clean up uploaded image
+        return jsonify({"error": "Image segmentation failed."}), 500
 
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute("UPDATE detections SET status = 'completed' WHERE id = ?", (detection_id,))
-            conn.commit()
-        
-        socketio.emit('detection_complete', {
-            'detection_id': detection_id,
-            'status': 'completed',
-            'results': final_results
-        })
-        
-    except Exception as e:
-        print(f"[ERROR] Video detection error: {e}", exc_info=True)
-        socketio.emit('detection_error', {
-            'detection_id': detection_id,
-            'error': str(e)
-        })
-    finally:
-        detection_active = False
-        if os.path.exists(video_path):
-            os.remove(video_path)
 
 @app.route('/api/camera/start', methods=['GET'])
 def start_camera():
@@ -564,9 +546,24 @@ def process_camera_tracking_stream(detection_id):
 
 def run_segmentation_on_image(image_path, car_id_int):
     """Helper function to run segmentation model on a given image path."""
-    if image_path.startswith('Result/API/cars/') or image_path.startswith('Result/API/parts/'):
-        relative_path = image_path.replace('Result/API/', '', 1) 
-        full_system_path = os.path.join(Config.OUTPUT_DIR, relative_path).replace('\\', os.sep)
+    # This logic handles paths from CAR_IMG_DIR, PART_IMG_DIR, and UPLOAD_FOLDER
+    if image_path.startswith('Result/API/cars/') or \
+       image_path.startswith('Result/API/parts/') or \
+       image_path.startswith('Result/API/uploads/'): # Added uploads
+        
+        # Determine the base directory to resolve the path correctly
+        if image_path.startswith('Result/API/cars/'):
+            base_dir = Config.CAR_IMG_DIR
+        elif image_path.startswith('Result/API/parts/'):
+            base_dir = Config.PART_IMG_DIR
+        elif image_path.startswith('Result/API/uploads/'): # New for uploaded images
+            base_dir = Config.UPLOAD_FOLDER
+        else: # Fallback, though current logic should catch it
+            base_dir = Config.OUTPUT_DIR 
+
+        # Extract just the filename or relative part after the base directory
+        relative_path_segment = image_path.split('/', 3)[-1] # Gets segment after 'Result/API/X/'
+        full_system_path = os.path.join(base_dir, relative_path_segment).replace('\\', os.sep)
     else:
         full_system_path = image_path 
 
@@ -655,32 +652,69 @@ def segment_captured_car():
     if not load_models():
         return jsonify({"error": "Failed to load segmentation model."}), 500
 
-    if car_image_path_from_frontend.startswith('Result/API/cars/') or car_image_path_from_frontend.startswith('Result/API/parts/'):
-        relative_path = car_image_path_from_frontend.replace('Result/API/', '', 1)
-        system_image_path = os.path.join(Config.OUTPUT_DIR, relative_path).replace('/', os.sep)
+    # Determine the full system path for the image based on its relative URL
+    if car_image_path_from_frontend.startswith('Result/API/cars/'):
+        relative_path_segment = car_image_path_from_frontend.replace('Result/API/cars/', '', 1)
+        system_image_path = os.path.join(Config.CAR_IMG_DIR, relative_path_segment).replace('/', os.sep)
+    elif car_image_path_from_frontend.startswith('Result/API/uploads/'): # New for uploaded images
+        relative_path_segment = car_image_path_from_frontend.replace('Result/API/uploads/', '', 1)
+        system_image_path = os.path.join(Config.UPLOAD_FOLDER, relative_path_segment).replace('/', os.sep)
     else:
+        # Fallback, or handle other prefixes if they exist
         system_image_path = car_image_path_from_frontend
+
 
     segmentation_results = run_segmentation_on_image(system_image_path, car_id_int_from_frontend)
 
     if segmentation_results:
         car_db_id = f"{detection_id}_{car_key}"
         
-        temp_processor = CarTrackingProcessor(detection_id, "camera") 
-        temp_processor.captured_cars_data[car_key] = { 
-            'id': car_id_int_from_frontend,
-            'car_image_path': car_image_path_from_frontend,
-            'detection_id': detection_id,
-            'car_key': car_key,
-            'timestamp': datetime.now().isoformat()
-        }
+        # We don't need a full CarTrackingProcessor instance for this,
+        # just directly update the database.
+        # This function implicitly confirms the car.
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            detected_count = sum(1 for p_data in segmentation_results['parts'].values() if p_data["status"] == 1)
+            total_parts = len(segmentation_results['parts'])
 
-        # This will now automatically set 'confirmed' to true
-        temp_processor.update_car_and_parts_in_db(car_db_id, {
-            'id': car_id_int_from_frontend,
-            'car_image_path': car_image_path_from_frontend, 
-            **segmentation_results 
-        })
+            cursor.execute('''
+                INSERT OR REPLACE INTO cars (id, detection_id, car_id, condition_percentage, car_image_path, detected_parts, total_parts, confirmed, confirmation_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            ''', (
+                car_db_id,
+                detection_id,
+                car_id_int_from_frontend,
+                segmentation_results['condition'],
+                car_image_path_from_frontend, 
+                detected_count,
+                total_parts,
+                True, # Auto-confirm here
+                datetime.now().isoformat() # Set confirmation time
+            ))
+
+            cursor.execute('DELETE FROM parts WHERE car_db_id = ?', (car_db_id,))
+            
+            for part_name_key, part_data in segmentation_results['parts'].items(): 
+                cursor.execute('''
+                    INSERT INTO parts (id, car_db_id, part_name, part_id, status, confidence, image_path)
+                    VALUES (?, ?, ?, ?, ?, ?, ?)
+                ''', (
+                    f"{car_db_id}_{part_data['name']}_{uuid.uuid4().hex[:4]}", 
+                    car_db_id,
+                    part_data["name"],
+                    part_name_key, 
+                    part_data["status"],
+                    part_data["confidence"],
+                    part_data.get("image_path") 
+                ))
+
+            # Update the detection record status if needed, assuming this completes the 'processing' for a camera capture
+            cursor.execute('''
+                UPDATE detections SET status = 'completed_segmentation' WHERE id = ?
+            ''', (detection_id,))
+            
+            conn.commit()
         
         return jsonify({
             "message": "Segmentation completed successfully and car confirmed",
@@ -718,24 +752,41 @@ def delete_car(car_db_id):
                 part_image_paths = cursor.fetchall()
                 for part_path_row in part_image_paths:
                     if part_path_row['image_path']:
-                        try:
-                            os.remove(part_path_row['image_path'])
-                            print(f"[INFO] Deleted part image: {part_path_row['image_path']}")
-                        except OSError as e:
-                            print(f"[WARNING] Could not delete part image {part_path_row['image_path']}: {e}")
+                        # Adjust path if it's a relative URL to system path
+                        if part_path_row['image_path'].startswith('Result/API/parts/'):
+                            part_full_path = os.path.join(Config.PART_IMG_DIR, part_path_row['image_path'].replace('Result/API/parts/', '')).replace('\\', os.sep)
+                        else:
+                            part_full_path = part_path_row['image_path'] # Assume it's already a system path
 
-                # Delete car record (parts will be cascade deleted)
+                        try:
+                            if os.path.exists(part_full_path):
+                                os.remove(part_full_path)
+                                print(f"[INFO] Deleted part image: {part_full_path}")
+                        except OSError as e:
+                            print(f"[WARNING] Could not delete part image {part_full_path}: {e}")
+
+                # Delete car record (parts will be cascade deleted by FK constraint)
                 cursor.execute('DELETE FROM cars WHERE id = ?', (car_db_id,))
                 conn.commit()
 
                 if cursor.rowcount > 0:
-                    # Delete car image
+                    # Delete car image - this could be from CAR_IMG_DIR (camera) or UPLOAD_FOLDER (image upload)
                     if car_image_path:
-                        try:
-                            os.remove(car_image_path)
-                            print(f"[INFO] Deleted car image: {car_image_path}")
-                        except OSError as e:
-                            print(f"[WARNING] Could not delete car image {car_image_path}: {e}")
+                        car_full_path = None
+                        if car_image_path.startswith('Result/API/cars/'):
+                            car_full_path = os.path.join(Config.CAR_IMG_DIR, car_image_path.replace('Result/API/cars/', '')).replace('\\', os.sep)
+                        elif car_image_path.startswith('Result/API/uploads/'):
+                            car_full_path = os.path.join(Config.UPLOAD_FOLDER, car_image_path.replace('Result/API/uploads/', '')).replace('\\', os.sep)
+                        else:
+                            car_full_path = car_image_path # Assume it's a direct system path
+
+                        if car_full_path:
+                            try:
+                                if os.path.exists(car_full_path):
+                                    os.remove(car_full_path)
+                                    print(f"[INFO] Deleted car image: {car_full_path}")
+                            except OSError as e:
+                                print(f"[WARNING] Could not delete car image {car_full_path}: {e}")
                     return jsonify({"message": "Car and associated data deleted successfully."}), 200
                 else:
                     return jsonify({"error": "Car not found."}), 404
@@ -745,10 +796,6 @@ def delete_car(car_db_id):
     except Exception as e:
         print(f"[ERROR] Failed to delete car {car_db_id}: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
-
-
-# Removed the /api/confirm-car endpoint as it's no longer needed for explicit confirmation.
-# The confirmation is now handled automatically in update_car_and_parts_in_db.
 
 
 @app.route('/api/reports', methods=['GET'])
@@ -858,8 +905,12 @@ def get_detection_details(detection_id):
                 
                 # Reconstruct car_key from car_db_id for frontend consistency
                 # Assuming car_db_id is like 'detection_id_car_key' (e.g., 'video_12345_car_3')
+                # For image upload it will be image_{timestamp}_{uuid}_car_1
                 parts_of_car_db_id = car_db_id.split('_')
-                car_key_from_db_id = '_'.join(parts_of_car_db_id[len(parts_of_car_db_id)-2:]) if len(parts_of_car_db_id) >= 2 else None
+                if car_db_id.startswith('image_'):
+                     car_key_from_db_id = parts_of_car_db_id[-1] # This will be 'car_1'
+                else: # For camera/video
+                    car_key_from_db_id = '_'.join(parts_of_car_db_id[len(parts_of_car_db_id)-2:]) if len(parts_of_car_db_id) >= 2 else None
 
 
                 cars_details[car_key_from_db_id] = { 
@@ -920,8 +971,13 @@ def get_all_cars_for_review():
                 
                 # Reconstruct car_key and detection_id from car_db_id
                 parts_of_car_db_id = car_db_id.split('_')
-                detection_id_from_db = parts_of_car_db_id[0]
-                car_key_from_db = '_'.join(parts_of_car_db_id[1:]) 
+                if car_db_id.startswith('image_'):
+                    detection_id_from_db = '_'.join(parts_of_car_db_id[0:3]) # e.g., 'image_timestamp_uuid'
+                    car_key_from_db = parts_of_car_db_id[-1] # 'car_1'
+                else: # For camera/video
+                    detection_id_from_db = '_'.join(parts_of_car_db_id[:-1])
+                    car_key_from_db = parts_of_car_db_id[-1] 
+
 
                 # Determine status for frontend
                 status_for_frontend = 'Done'
