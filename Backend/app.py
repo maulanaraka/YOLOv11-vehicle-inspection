@@ -1,3 +1,4 @@
+import sqlite3
 from flask import Flask, request, jsonify, render_template_string, send_from_directory
 from flask_socketio import SocketIO, emit
 from flask_cors import CORS
@@ -15,7 +16,6 @@ from datetime import datetime
 import base64
 from io import BytesIO
 from PIL import Image
-import sqlite3
 from contextlib import contextmanager
 import eventlet
 from time import time as current_time
@@ -80,7 +80,7 @@ def init_database():
             total_parts INTEGER,
             confirmed BOOLEAN DEFAULT FALSE,
             confirmation_time TEXT,
-            FOREIGN KEY (detection_id) REFERENCES detections (id)
+            FOREIGN KEY (detection_id) REFERENCES detections (id) ON DELETE CASCADE
         )
     ''')
     
@@ -93,7 +93,7 @@ def init_database():
             status INTEGER, 
             confidence REAL,
             image_path TEXT,
-            FOREIGN KEY (car_db_id) REFERENCES cars (id)
+            FOREIGN KEY (car_db_id) REFERENCES cars (id) ON DELETE CASCADE
         )
     ''')
     
@@ -207,7 +207,7 @@ class CarTrackingProcessor:
         with get_db_connection() as conn:
             cursor = conn.cursor()
             cursor.execute('''
-                INSERT INTO detections (id, timestamp, source_type, source_path, status, total_cars)
+                INSERT OR IGNORE INTO detections (id, timestamp, source_type, source_path, status, total_cars)
                 VALUES (?, ?, ?, ?, ?, ?)
             ''', (
                 self.detection_id,
@@ -282,7 +282,8 @@ def index():
         <li>POST /api/segment-captured-car - Run segmentation on captured car</li>
         <li>GET /api/detections - Get all detection records</li>
         <li>GET /api/detections/&lt;detection_id&gt;/details - Get detailed report for a detection ID</li>
-        <li>POST /api/confirm-car - Confirm car detection results</li>
+        <li>GET /api/cars-for-review - Get all cars for review with their details</li>
+        <li>DELETE /api/delete-car/&lt;car_db_id&gt; - Delete a car and its parts</li>
         <li>GET /api/reports - Get detection reports</li>
     </ul>
     ''')
@@ -418,6 +419,8 @@ def process_video_detection_with_segmentation(detection_id, video_path):
                 final_results[car_info['car_key']] = {
                     'id': car_info['id'],
                     'car_image_path': car_info['car_image_path'],
+                    'car_key': car_info['car_key'], # Include car_key here for frontend convenience
+                    'detection_id': detection_id, # Include detection_id
                     **segmentation_result
                 }
 
@@ -685,12 +688,61 @@ def segment_captured_car():
                 car_key: { 
                     'id': car_id_int_from_frontend,
                     'car_image_path': car_image_path_from_frontend,
+                    'car_key': car_key, # Ensure car_key is in the returned results
+                    'detection_id': detection_id, # Ensure detection_id is in the returned results
                     **segmentation_results
                 }
             }
         })
     else:
         return jsonify({"error": "Segmentation failed for the captured car."}), 500
+
+
+@app.route('/api/delete-car/<string:car_db_id>', methods=['DELETE'])
+def delete_car(car_db_id):
+    """Deletes a car record and its associated parts from the database."""
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Fetch car details to get image paths before deletion
+            cursor.execute('SELECT car_image_path FROM cars WHERE id = ?', (car_db_id,))
+            car_record = cursor.fetchone()
+            if car_record:
+                car_image_path = car_record['car_image_path']
+                
+                # Delete associated part images
+                cursor.execute('SELECT image_path FROM parts WHERE car_db_id = ?', (car_db_id,))
+                part_image_paths = cursor.fetchall()
+                for part_path_row in part_image_paths:
+                    if part_path_row['image_path']:
+                        try:
+                            os.remove(part_path_row['image_path'])
+                            print(f"[INFO] Deleted part image: {part_path_row['image_path']}")
+                        except OSError as e:
+                            print(f"[WARNING] Could not delete part image {part_path_row['image_path']}: {e}")
+
+                # Delete car record (parts will be cascade deleted)
+                cursor.execute('DELETE FROM cars WHERE id = ?', (car_db_id,))
+                conn.commit()
+
+                if cursor.rowcount > 0:
+                    # Delete car image
+                    if car_image_path:
+                        try:
+                            os.remove(car_image_path)
+                            print(f"[INFO] Deleted car image: {car_image_path}")
+                        except OSError as e:
+                            print(f"[WARNING] Could not delete car image {car_image_path}: {e}")
+                    return jsonify({"message": "Car and associated data deleted successfully."}), 200
+                else:
+                    return jsonify({"error": "Car not found."}), 404
+            else:
+                return jsonify({"error": "Car not found."}), 404
+
+    except Exception as e:
+        print(f"[ERROR] Failed to delete car {car_db_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route('/api/confirm-car', methods=['POST'])
@@ -778,7 +830,7 @@ def get_reports():
                 
                 parts_data = {}
                 for part in parts:
-                    parts_data[part['part_name']] = { 
+                    parts_data[part['part_id']] = { # Use part_id (e.g., 'headlight_1') as key
                         'name': part['part_name'],
                         'status': part['status'],
                         'confidence': part['confidence'],
@@ -872,7 +924,13 @@ def get_detection_details(detection_id):
                         'image_path': part['image_path']
                     }
                 
-                cars_details[car_db_id.split('_')[-1]] = { # Use car_key (e.g., 'car_3') as top-level key
+                # Reconstruct car_key from car_db_id for frontend consistency
+                # Assuming car_db_id is like 'detection_id_car_key' (e.g., 'video_12345_car_3')
+                parts_of_car_db_id = car_db_id.split('_')
+                car_key_from_db_id = '_'.join(parts_of_car_db_id[len(parts_of_car_db_id)-2:]) if len(parts_of_car_db_id) >= 2 else None
+
+
+                cars_details[car_key_from_db_id] = { 
                     'id': car['car_id'],
                     'condition': car['condition_percentage'],
                     'car_image_path': car['car_image_path'],
@@ -880,7 +938,9 @@ def get_detection_details(detection_id):
                     'total_parts': car['total_parts'],
                     'confirmed': bool(car['confirmed']),
                     'confirmation_time': car['confirmation_time'],
-                    'parts': parts_data
+                    'parts': parts_data,
+                    'car_key': car_key_from_db_id, # Ensure car_key is explicitly included
+                    'detection_id': detection_id # Ensure detection_id is explicitly included
                 }
         
         full_report = {
@@ -892,6 +952,73 @@ def get_detection_details(detection_id):
         
     except Exception as e:
         print(f"[ERROR] Failed to get detection details for {detection_id}: {e}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/api/cars-for-review', methods=['GET'])
+def get_all_cars_for_review():
+    """
+    Returns all cars in the database that are either unconfirmed (for review)
+    or have confirmed status, along with their full segmentation details.
+    This replaces the need to iterate through detections and fetch details one by one on the frontend.
+    """
+    try:
+        with get_db_connection() as conn:
+            cursor = conn.cursor()
+            
+            # Fetch all cars
+            cursor.execute('SELECT * FROM cars')
+            all_cars_records = cursor.fetchall()
+            
+            cars_for_review_list = []
+            for car_record in all_cars_records:
+                car_db_id = car_record['id']
+                
+                # Fetch parts for each car
+                cursor.execute('SELECT * FROM parts WHERE car_db_id = ?', (car_db_id,))
+                parts = cursor.fetchall()
+                
+                parts_data = {}
+                for part in parts:
+                    parts_data[part['part_id']] = {
+                        'name': part['part_name'],
+                        'status': part['status'],
+                        'confidence': part['confidence'],
+                        'image_path': part['image_path']
+                    }
+                
+                # Reconstruct car_key and detection_id from car_db_id
+                parts_of_car_db_id = car_db_id.split('_')
+                detection_id_from_db = parts_of_car_db_id[0]
+                car_key_from_db = '_'.join(parts_of_car_db_id[1:]) 
+
+                # Determine status for frontend
+                status_for_frontend = 'Done' if car_record['condition_percentage'] is not None else 'Captured'
+
+                cars_for_review_list.append({
+                    'id': car_record['car_id'],
+                    'detection_id': detection_id_from_db,
+                    'car_key': car_key_from_db,
+                    'car_image_path': car_record['car_image_path'],
+                    'segmented': car_record['condition_percentage'] is not None, # True if segmentation results exist
+                    'segmentation_results': {
+                        'id': car_record['car_id'],
+                        'condition': car_record['condition_percentage'],
+                        'car_image_path': car_record['car_image_path'],
+                        'detected_parts': car_record['detected_parts'],
+                        'total_parts': car_record['total_parts'],
+                        'confirmed': bool(car_record['confirmed']),
+                        'confirmation_time': car_record['confirmation_time'],
+                        'parts': parts_data,
+                        'car_key': car_key_from_db,
+                        'detection_id': detection_id_from_db
+                    },
+                    'status': status_for_frontend
+                })
+        
+        return jsonify({'cars': cars_for_review_list})
+
+    except Exception as e:
+        print(f"[ERROR] Failed to get all cars for review: {e}", exc_info=True)
         return jsonify({"error": str(e)}), 500
 
 
