@@ -119,7 +119,7 @@
             display: none;
         }
 
-        .upload-btn, .action-btn { /* Changed camera-btn to action-btn for more general use */
+        .upload-btn, .action-btn {
             background: linear-gradient(135deg, #4299e1, #3182ce);
             color: white;
             padding: 15px 30px;
@@ -177,6 +177,80 @@
         .detection-results {
             margin-top: 30px;
         }
+
+        /* --- New/Modified Styles for Review Table --- */
+        .review-table-container {
+            margin-top: 20px;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .review-table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+
+        .review-table th {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .review-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e2e8f0;
+            vertical-align: middle;
+        }
+
+        .review-table tr:hover {
+            background: #f7fafc;
+        }
+
+        .review-table img {
+            max-width: 150px; /* Smaller image in table */
+            height: auto;
+            border-radius: 5px;
+            display: block; /* Ensures centering if needed */
+            margin: 0 auto;
+        }
+
+        .review-table .action-buttons button {
+            padding: 8px 15px;
+            font-size: 14px;
+            margin: 5px;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s ease;
+        }
+        .review-table .action-buttons button:hover {
+            transform: translateY(-1px);
+        }
+        .review-table .action-buttons .start-seg-btn,
+        .review-table .action-buttons .view-results-btn {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+        }
+        .review-table .action-buttons .restart-seg-btn {
+            background: linear-gradient(135deg, #ed8936, #dd6b20); /* Orange for restart */
+            color: white;
+        }
+        .review-table .action-buttons .delete-btn {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+            color: white;
+        }
+        .review-table .action-buttons button:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+            box-shadow: none;
+        }
+
+        /* --- Existing styles remain below --- */
 
         .car-card {
             background: white;
@@ -530,26 +604,29 @@
         </div>
 
         <div id="review" class="tab-content">
-            <h2>Review Captured Car & Segment Parts</h2>
+            <h2>Review Captured Cars</h2>
             <div id="reviewInitialPrompt" style="text-align: center; color: #718096; padding: 40px;">
-                No car selected for review. Please capture a car using the "Live Camera Tracking" tab first.
+                No cars to review. Please capture a car using the "Live Camera Tracking" tab or upload a video.
             </div>
 
-            <div id="capturedCarReviewArea" style="display: none;">
-                <h3>Captured Car for Segmentation:</h3>
-                <img id="reviewCarImage" src="" alt="Captured Car" style="max-width: 100%; border-radius: 10px; box-shadow: 0 4px 12px rgba(0,0,0,0.1); margin-bottom: 20px;">
-                <p id="reviewCarDetails" style="font-size: 1.1rem; margin-bottom: 20px;"></p>
+            <div id="reviewTableContainer" class="review-table-container" style="display: none;">
+                <table class="review-table">
+                    <thead>
+                        <tr>
+                            <th>Car ID</th>
+                            <th>Image</th>
+                            <th>Status</th>
+                            <th>Action</th>
+                        </tr>
+                    </thead>
+                    <tbody id="reviewTableBody">
+                        </tbody>
+                </table>
+            </div>
 
-                <div id="segmentationAction" style="text-align: center; margin-bottom: 30px;">
-                    <button id="startSegmentationBtn" class="action-btn" onclick="startSegmentation()">
-                        ⚙️ Start Part Segmentation
-                    </button>
-                    <p id="segmentationStatus" style="margin-top: 10px; color: #718096;"></p>
+            <div id="segmentationResultsDisplay" class="detection-results" style="display: none;">
+                <h3>Segmentation Results:</h3>
                 </div>
-
-                <div id="segmentationResultsDisplay" class="detection-results" style="display: none;">
-                    </div>
-            </div>
         </div>
 
         <div id="reports" class="tab-content">
@@ -602,9 +679,10 @@
         let socket = null;
         let currentDetectionId = null;
         let detectionResultsMemory = {}; 
-        let cameraActive = false; // Controls the camera greenlet loop
+        let cameraActive = false;
         let mediaStream = null; 
         let lastCapturedCarInfo = null; // Stores info about the car captured by camera tracking
+        let carsForReview = []; // Array to hold cars for review in the table
 
         function initializeSocket() {
             socket = io(API_BASE, {
@@ -613,7 +691,7 @@
                 reconnectionAttempts: 10,
                 timeout: 20000,
                 pingInterval: 10000,
-                pingTimeout: 60000 // Increased timeout
+                pingTimeout: 60000 
             });
             
             socket.on('connect', () => {
@@ -631,11 +709,9 @@
                 console.warn('Disconnected from server:', reason);
                 showConnectionStatus(false);
                 showNotification(`Disconnected: ${reason}`, 'error');
-                // Even on disconnect, ensure camera is explicitly stopped through API if it was active
-                if (cameraActive) { // Check if our frontend state thinks camera is active
+                if (cameraActive) {
                     console.log("Client disconnected, attempting to stop camera via API.");
-                    stopCameraViaApi(); // Try to stop camera on disconnect if it was running
-                    // The handleCameraStopped will then update UI
+                    stopCameraViaApi(); 
                 }
             });
             
@@ -663,11 +739,14 @@
             
             socket.on('camera_frame', (data) => {
                 updateCameraFrame(data);
-                if (data.captured_car_info && !lastCapturedCarInfo) { // Only process first time captured_car_info is sent
-                    lastCapturedCarInfo = data.captured_car_info; // Store captured car info
-                    localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); // Save to local storage
+                if (data.captured_car_info && !lastCapturedCarInfo) {
+                    lastCapturedCarInfo = data.captured_car_info; 
+                    localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); 
                     console.log("Car captured detected by camera_frame. Stopping camera via API.");
-                    stopCameraViaApi(); // FRONTEND NOW INITIATES THE STOP
+                    setTimeout(async () => { // Added a small timeout to ensure data.captured_car_info is fully processed
+                        await stopCameraViaApi();
+                        console.log("API stop triggered after delay.");
+                    }, 100); 
                 }
             });
             
@@ -675,7 +754,6 @@
                 handleCameraStopped(data);
             });
 
-            // New: Segmentation complete event (for captured car)
             socket.on('segmentation_complete', (data) => {
                 handleSegmentationComplete(data);
             });
@@ -724,9 +802,8 @@
             if (tabName === 'reports') {
                 loadReports();
             } else if (tabName === 'review') {
-                displayReviewArea();
+                displayReviewArea(); // Re-render table when switching to review tab
             }
-            // Ensure captured car prompt is hidden when switching tabs unless explicitly shown by camera stop
             if (tabName !== 'camera') {
                 document.getElementById('capturedCarPrompt').style.display = 'none';
             }
@@ -771,7 +848,7 @@
             const progressFill = document.getElementById('progressFill');
             const progressText = document.getElementById('progressText');
             
-            progressFill.style.width = (data.progress > 100 ? data.progress - 100 : data.progress) + '%'; // Normalize for display
+            progressFill.style.width = (data.progress > 100 ? data.progress - 100 : data.progress) + '%'; 
             progressText.textContent = data.message || 'Processing...';
         }
 
@@ -781,13 +858,25 @@
             document.getElementById('progressText').textContent = 'Video processing completed!';
             detectionResultsMemory[data.detection_id] = data.results; 
             
+            // Add all segmented cars from video to carsForReview array
+            Object.entries(data.results).forEach(([carKey, carData]) => {
+                carsForReview.push({
+                    id: carData.id,
+                    detection_id: data.detection_id,
+                    car_key: carKey,
+                    car_image_path: carData.car_image_path,
+                    segmented: true, // Mark as already segmented
+                    segmentation_results: carData, // Store full results
+                    status: 'Done' // Explicitly set status for segmented video cars
+                });
+            });
+
             showNotification('Video detection completed successfully! Results available in Review tab.', 'success');
             
             setTimeout(() => {
                 showTab('review');
-                lastCapturedCarInfo = null; // Clear if coming from video, not camera
-                localStorage.removeItem('lastCapturedCarInfo'); // Clear from local storage
-                displayReviewArea(data.results); // Display the full video results
+                lastCapturedCarInfo = null; 
+                localStorage.removeItem('lastCapturedCarInfo'); 
                 document.getElementById('processingStatus').style.display = 'none';
             }, 1000);
         }
@@ -795,12 +884,11 @@
         function handleDetectionError(data) {
             showNotification('Detection error: ' + (data.error || 'Unknown error'), 'error');
             document.getElementById('processingStatus').style.display = 'none';
-            // If camera was active, ensure it's stopped via API
             if (cameraActive) { 
                 stopCameraViaApi(); 
             }
-            lastCapturedCarInfo = null; // Clear any partial capture
-            localStorage.removeItem('lastCapturedCarInfo'); // Clear from local storage
+            lastCapturedCarInfo = null; 
+            localStorage.removeItem('lastCapturedCarInfo'); 
             document.getElementById('capturedCarPrompt').style.display = 'none';
         }
 
@@ -810,7 +898,6 @@
             const section = document.getElementById('cameraSection');
             
             if (!cameraActive) {
-                // START Camera
                 try {
                     const response = await fetch(`${API_BASE}/api/camera/start`);
                     const result = await response.json();
@@ -820,9 +907,9 @@
                         btn.textContent = '⏹️ Stop Camera Tracking';
                         btn.classList.add('active', 'stop');
                         section.style.display = 'grid';
-                        document.getElementById('capturedCarPrompt').style.display = 'none'; // Hide prompt if restarting
-                        lastCapturedCarInfo = null; // Clear previous captured car info when starting new session
-                        localStorage.removeItem('lastCapturedCarInfo'); // Clear from local storage
+                        document.getElementById('capturedCarPrompt').style.display = 'none'; 
+                        lastCapturedCarInfo = null; 
+                        localStorage.removeItem('lastCapturedCarInfo'); 
                         showNotification('Camera tracking started', 'success');
                     } else {
                         throw new Error(result.error);
@@ -831,13 +918,11 @@
                     showNotification('Failed to start camera: ' + error.message, 'error');
                 }
             } else {
-                // STOP Camera (manual stop via button click)
                 await stopCameraViaApi(); 
                 showNotification('Camera tracking stopped manually.', 'info');
             }
         }
 
-        // New function to reliably stop camera via API
         async function stopCameraViaApi() {
             try {
                 const response = await fetch(`${API_BASE}/api/camera/stop`);
@@ -846,7 +931,6 @@
                     throw new Error(result.error);
                 }
                 console.log("API Camera stop response:", result.message);
-                // UI updates will be handled by socket.on('camera_stopped')
             } catch (error) {
                 console.error("Error calling /api/camera/stop:", error.message);
                 showNotification('Error stopping camera: ' + error.message, 'error');
@@ -858,7 +942,7 @@
             document.getElementById('cameraStatus').textContent = 'Camera active - tracking cars...';
             document.getElementById('capturedCarPrompt').style.display = 'none'; 
             lastCapturedCarInfo = null; 
-            localStorage.removeItem('lastCapturedCarInfo'); // Clear local storage on new start
+            localStorage.removeItem('lastCapturedCarInfo'); 
         }
 
         function updateCameraFrame(data) {
@@ -884,9 +968,9 @@
 
             if (data.captured_car_info && !lastCapturedCarInfo) {
                 lastCapturedCarInfo = data.captured_car_info; 
-                localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); // Save to local storage
+                localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); 
                 console.log("Car captured detected by camera_frame. Scheduling API stop.");
-                setTimeout(async () => {
+                setTimeout(async () => { // Added a small timeout to ensure data.captured_car_info is fully processed
                     await stopCameraViaApi();
                     console.log("API stop triggered after delay.");
                 }, 100); 
@@ -901,140 +985,195 @@
             document.getElementById('cameraStatus').textContent = 'Camera inactive';
 
             if (data.reason === 'captured' && data.captured_car_info) {
-                // Ensure lastCapturedCarInfo is set here from data, in case camera_frame event was missed due to timing
                 lastCapturedCarInfo = data.captured_car_info; 
-                localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); // Ensure saved
+                localStorage.setItem('lastCapturedCarInfo', JSON.stringify(lastCapturedCarInfo)); 
                 document.getElementById('capturedCarPrompt').style.display = 'block';
                 document.getElementById('capturedCarThumbnail').src = `/${data.captured_car_info.car_image_path}`;
                 document.getElementById('capturedCarInfoText').textContent = `Car ID: ${data.captured_car_info.id}`;
                 showNotification('Car captured! Review or restart detection.', 'info');
-            } else if (data.reason === 'manual_stop' || data.reason === 'error') { // Clear on manual stop or error
+                
+                // Add the newly captured (unsegmented) car to the review array
+                // Only add if it's not already in carsForReview (e.g., from a fresh video upload)
+                const carDbIdForNewCapture = `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}`;
+                if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForNewCapture)) {
+                    carsForReview.push({
+                        id: lastCapturedCarInfo.id,
+                        detection_id: lastCapturedCarInfo.detection_id,
+                        car_key: lastCapturedCarInfo.car_key,
+                        car_image_path: lastCapturedCarInfo.car_image_path,
+                        segmented: false, // Mark as not yet segmented
+                        segmentation_results: null, 
+                        status: 'Captured' // Custom status for frontend display
+                    });
+                }
+                displayReviewArea(); // Refresh review table
+            } else if (data.reason === 'manual_stop' || data.reason === 'error') { 
                 lastCapturedCarInfo = null; 
                 localStorage.removeItem('lastCapturedCarInfo'); 
-                document.getElementById('capturedCarPrompt').style.display = 'none'; // Hide if no car captured
+                document.getElementById('capturedCarPrompt').style.display = 'none'; 
             }
         }
 
         function restartDetection() {
-            lastCapturedCarInfo = null; // Clear captured car
-            localStorage.removeItem('lastCapturedCarInfo'); // Clear from local storage
+            lastCapturedCarInfo = null; 
+            localStorage.removeItem('lastCapturedCarInfo'); 
             document.getElementById('capturedCarPrompt').style.display = 'none';
-            toggleCamera(); // Restart camera (which calls /api/camera/start)
+            toggleCamera(); 
             showNotification('Detection restarted, previous capture discarded.', 'info');
         }
 
         function proceedToReviewCapturedCar() {
             if (lastCapturedCarInfo) {
                 showTab('review');
-                displayReviewArea();
             } else {
                 showNotification('No car has been captured to review!', 'error');
             }
         }
 
         // --- Review Tab Functions ---
-        function displayReviewArea(videoResults = null) {
+        function displayReviewArea() {
             const reviewInitialPrompt = document.getElementById('reviewInitialPrompt');
-            const capturedCarReviewArea = document.getElementById('capturedCarReviewArea');
-            const reviewCarImage = document.getElementById('reviewCarImage');
-            const reviewCarDetails = document.getElementById('reviewCarDetails');
-            const startSegmentationBtn = document.getElementById('startSegmentationBtn');
-            const segmentationStatus = document.getElementById('segmentationStatus');
+            const reviewTableContainer = document.getElementById('reviewTableContainer');
+            const reviewTableBody = document.getElementById('reviewTableBody');
             const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
 
-            segmentationResultsDisplay.style.display = 'none'; // Hide previous segmentation results
-            segmentationResultsDisplay.innerHTML = ''; // Clear results
+            segmentationResultsDisplay.style.display = 'none'; 
+            segmentationResultsDisplay.innerHTML = ''; 
+            reviewTableBody.innerHTML = ''; // Clear existing rows
 
-            if (videoResults) { // If coming from video detection
-                reviewInitialPrompt.style.display = 'none';
-                capturedCarReviewArea.style.display = 'block';
-                startSegmentationBtn.style.display = 'none'; // Hide segmentation button for video results
-                reviewCarImage.style.display = 'none'; // Hide single image for video results
-                reviewCarDetails.textContent = `Displaying results from video detection ID: ${currentDetectionId}`;
-                segmentationStatus.textContent = '';
-
-                Object.entries(videoResults).forEach(([carKey, carData]) => {
-                    const carCard = createCarCard(carKey, carData, currentDetectionId);
-                    segmentationResultsDisplay.appendChild(carCard);
-                });
-                segmentationResultsDisplay.style.display = 'block';
-                showNotification('Displaying video detection results.', 'info');
-
-            } else if (lastCapturedCarInfo) { // If a single car captured by camera
-                reviewInitialPrompt.style.display = 'none';
-                capturedCarReviewArea.style.display = 'block';
-                startSegmentationBtn.style.display = 'inline-block'; // Show segmentation button
-                reviewCarImage.style.display = 'block';
-                reviewCarImage.src = `/${lastCapturedCarInfo.car_image_path}`;
-                reviewCarDetails.textContent = `Captured Car ID: ${lastCapturedCarInfo.id} (Ready for Segmentation)`;
-                segmentationStatus.textContent = 'Click "Start Part Segmentation" to analyze this car.';
-
-            } else { // No car captured or video results available
+            if (carsForReview.length === 0) {
                 reviewInitialPrompt.style.display = 'block';
-                capturedCarReviewArea.style.display = 'none';
-            }
-        }
-
-        async function startSegmentation() {
-            if (!lastCapturedCarInfo) {
-                showNotification('No car to segment. Please capture a car first.', 'error');
+                reviewTableContainer.style.display = 'none';
                 return;
             }
 
-            const segmentationStatus = document.getElementById('segmentationStatus');
-            const startSegmentationBtn = document.getElementById('startSegmentationBtn');
-            const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
+            reviewInitialPrompt.style.display = 'none';
+            reviewTableContainer.style.display = 'block';
 
-            segmentationStatus.textContent = 'Running segmentation... This may take a moment.';
-            startSegmentationBtn.disabled = true;
-            segmentationResultsDisplay.innerHTML = '';
-            segmentationResultsDisplay.style.display = 'none';
+            carsForReview.forEach(carData => { // Iterate through carsForReview
+                const row = document.createElement('tr');
+                const carDbId = `${carData.detection_id}_${carData.car_key}`;
+                
+                let actionButtonsHtml = '';
+                let statusText = carData.status || 'Unknown'; // Use carData.status if set, else 'Unknown'
+
+                if (carData.segmented) {
+                    actionButtonsHtml = `
+                        <button class="action-btn view-results-btn" onclick="viewSegmentationResults('${carDbId}')">View Results</button>
+                        <button class="action-btn restart-seg-btn" onclick="restartSegmentation('${carDbId}')">Restart Segmentation</button>
+                    `;
+                    statusText = 'Done'; // Set status to 'Done' if segmented
+                } else {
+                    actionButtonsHtml = `
+                        <button class="action-btn start-seg-btn" onclick="startSegmentation('${carDbId}')" id="segmentBtn_${carDbId}">Start Segmentation</button>
+                    `;
+                    statusText = 'Captured'; // Explicitly set for unsegmented captures
+                }
+                actionButtonsHtml += `<button class="action-btn delete-btn" onclick="deleteCarFromReview('${carDbId}')">Delete</button>`;
+
+                row.innerHTML = `
+                    <td>${carData.id}</td>
+                    <td><img src="/${carData.car_image_path}" alt="Car ID ${carData.id}"></td>
+                    <td id="status_${carDbId}">${statusText}</td>
+                    <td class="action-buttons" id="actions_${carDbId}">${actionButtonsHtml}</td>
+                `;
+                reviewTableBody.appendChild(row);
+            });
+        }
+
+        async function startSegmentation(carDbId) {
+            const carToSegment = carsForReview.find(car => `${car.detection_id}_${car.car_key}` === carDbId);
+
+            if (!carToSegment) {
+                showNotification('Car not found for segmentation.', 'error');
+                return;
+            }
+
+            const statusCell = document.getElementById(`status_${carDbId}`);
+            const actionButtonsDiv = document.getElementById(`actions_${carDbId}`);
+
+            statusCell.textContent = 'Running segmentation...';
+            actionButtonsDiv.querySelectorAll('button').forEach(btn => btn.disabled = true);
+
+            showNotification(`Starting segmentation for Car ID: ${carToSegment.id}`, 'info');
 
             try {
                 const response = await fetch(`${API_BASE}/api/segment-captured-car`, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({ /* backend uses global, no body needed */ })
+                    body: JSON.stringify({
+                        car_id: carToSegment.id,
+                        car_image_path: carToSegment.car_image_path,
+                        detection_id: carToSegment.detection_id,
+                        car_key: carToSegment.car_key
+                    })
                 });
 
                 const result = await response.json();
 
                 if (response.ok) {
                     showNotification('Segmentation completed successfully!', 'success');
-                    segmentationStatus.textContent = 'Segmentation complete.';
-                    handleSegmentationComplete({
-                        detection_id: result.detection_id,
-                        results: result.results 
-                    });
+                    
+                    carToSegment.segmented = true;
+                    Object.assign(carToSegment, { segmentation_results: result.results[carToSegment.car_key] });
+                    carToSegment.status = 'Done'; 
+
+                    if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
+                         lastCapturedCarInfo = null;
+                         localStorage.removeItem('lastCapturedCarInfo');
+                    }
+
+                    displayReviewArea(); 
+                    viewSegmentationResults(carDbId); 
                 } else {
                     throw new Error(result.error || 'Segmentation failed');
                 }
             } catch (error) {
                 showNotification('Segmentation failed: ' + error.message, 'error');
-                segmentationStatus.textContent = 'Segmentation failed: ' + error.message;
-            } finally {
-                startSegmentationBtn.disabled = false;
+                statusCell.textContent = `Segmentation failed: ${error.message}`;
+                actionButtonsDiv.querySelectorAll('button').forEach(btn => btn.disabled = false);
             }
         }
 
-        function handleSegmentationComplete(data) {
-            console.log("Segmentation complete data:", data);
-            if (!data.results) {
-                showNotification('No segmentation results returned.', 'error');
+        function restartSegmentation(carDbId) {
+            startSegmentation(carDbId);
+        }
+
+        function deleteCarFromReview(carDbId) {
+            const index = carsForReview.findIndex(car => `${car.detection_id}_${car.car_key}` === carDbId);
+            if (index !== -1) {
+                carsForReview.splice(index, 1);
+                showNotification('Car removed from review list.', 'info');
+                displayReviewArea();
+                
+                if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
+                    lastCapturedCarInfo = null;
+                    localStorage.removeItem('lastCapturedCarInfo');
+                }
+            } else {
+                showNotification('Car not found in review list.', 'error');
+            }
+        }
+
+        function viewSegmentationResults(carDbId) {
+            const car = carsForReview.find(c => `${c.detection_id}_${c.car_key}` === carDbId);
+            const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
+            
+            if (!car || !car.segmented || !car.segmentation_results) {
+                showNotification('Segmentation results not available for this car.', 'error');
+                segmentationResultsDisplay.style.display = 'none';
                 return;
             }
-            
-            detectionResultsMemory[data.detection_id] = data.results;
 
-            const segmentationResultsDisplay = document.getElementById('segmentationResultsDisplay');
-            segmentationResultsDisplay.innerHTML = '';
-
-            Object.entries(data.results).forEach(([carKey, carData]) => {
-                const carCard = createCarCard(carKey, carData, data.detection_id);
-                segmentationResultsDisplay.appendChild(carCard);
-            });
+            segmentationResultsDisplay.innerHTML = ''; 
             segmentationResultsDisplay.style.display = 'block';
+
+            const carCard = createCarCard(car.car_key, car.segmentation_results, car.detection_id);
+            segmentationResultsDisplay.appendChild(carCard);
+
+            segmentationResultsDisplay.scrollIntoView({ behavior: 'smooth', block: 'start' });
         }
+
 
         function createCarCard(carKey, carData, detectionId) {
             const card = document.createElement('div');
@@ -1110,10 +1249,9 @@
                             <p>Action completed at ${new Date().toLocaleString()}</p>
                         `;
                     }
-                    // If confirmed, clear the last captured car info from local storage
-                    if (isConfirmed && lastCapturedCarInfo && carDbId === `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}`) {
-                         lastCapturedCarInfo = null;
-                         localStorage.removeItem('lastCapturedCarInfo');
+                    if (isConfirmed) {
+                        // After confirming, we still want it to disappear from the review queue
+                        deleteCarFromReview(carDbId); 
                     }
                 } else {
                     throw new Error(result.error);
@@ -1204,17 +1342,46 @@
         }
 
         async function viewDetection(detectionId) {
-            if (detectionResultsMemory[detectionId]) {
-                currentDetectionId = detectionId; 
-                showTab('review');
-                displayReviewArea(detectionResultsMemory[detectionId]); 
-                showNotification(`Viewing detection results for ID: ${detectionId} (from memory)`, 'info');
-            } else {
-                try {
-                    showNotification('Detection results not found in memory. Fetching from backend is not implemented yet.', 'error');
-                } catch (error) {
-                    showNotification('Error fetching detection results: ' + error.message, 'error');
+            try {
+                const response = await fetch(`${API_BASE}/api/detections/${detectionId}/details`);
+                const result = await response.json();
+
+                if (response.ok) {
+                    showNotification(`Loaded detailed report for Detection ID: ${detectionId}`, 'success');
+                    
+                    // Clear existing cars in review and populate with cars from this report
+                    carsForReview = []; // Clear the array
+                    const carsFromReport = Object.values(result.cars); // Get array of car objects
+                    
+                    carsFromReport.forEach(carData => {
+                        // Reconstruct object for carsForReview format
+                        const carKeyFromId = carData.car_image_path.split('_')[2]; // Extract car_key from image path heuristic
+                        carsForReview.push({
+                            id: carData.id,
+                            detection_id: detectionId, // Use the fetched detectionId
+                            car_key: carKeyFromId, // Use the extracted car_key
+                            car_image_path: carData.car_image_path,
+                            segmented: true, // Cars from detailed report are always segmented
+                            segmentation_results: carData, // Store the full car data from report
+                            status: 'Done' 
+                        });
+                    });
+
+                    showTab('review'); // Switch to the review tab
+                    // displayReviewArea() is called by showTab('review') and will render the new carsForReview array.
+
+                    // Automatically display results of the first car if there are any
+                    if (carsForReview.length > 0) {
+                        const firstCarDbId = `${carsForReview[0].detection_id}_${carsForReview[0].car_key}`;
+                        viewSegmentationResults(firstCarDbId);
+                    }
+
+                } else {
+                    throw new Error(result.error || 'Failed to load detection details');
                 }
+            } catch (error) {
+                showNotification('Error loading detection details: ' + error.message, 'error');
+                console.error('Error fetching detection details:', error);
             }
         }
 
@@ -1222,16 +1389,27 @@
             initializeSocket();
             showTab('detection'); 
 
-            // Attempt to load lastCapturedCarInfo from local storage on page load
             const storedCarInfo = localStorage.getItem('lastCapturedCarInfo');
             if (storedCarInfo) {
                 lastCapturedCarInfo = JSON.parse(storedCarInfo);
-                // Directly display the prompt if info exists
+                const carDbIdForExistingCapture = `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}`;
+                // Only add if it's not already in carsForReview (e.g., from a fresh video upload)
+                if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForExistingCapture)) {
+                    carsForReview.push({
+                        id: lastCapturedCarInfo.id,
+                        detection_id: lastCapturedCarInfo.detection_id,
+                        car_key: lastCapturedCarInfo.car_key,
+                        car_image_path: lastCapturedCarInfo.car_image_path,
+                        segmented: false, 
+                        segmentation_results: null, 
+                        status: 'Captured'
+                    });
+                }
+
                 document.getElementById('capturedCarPrompt').style.display = 'block';
                 document.getElementById('capturedCarThumbnail').src = `/${lastCapturedCarInfo.car_image_path}`;
                 document.getElementById('capturedCarInfoText').textContent = `Car ID: ${lastCapturedCarInfo.id} (from previous session)`;
                 showNotification('Found a previously captured car for review.', 'info');
-                // You might want to automatically switch to the camera tab here for visibility
                 showTab('camera'); 
             }
         });
