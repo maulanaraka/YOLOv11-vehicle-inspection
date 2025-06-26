@@ -1,0 +1,1108 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Car Part Detection System</title>
+    <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            color: #333;
+        }
+
+        .container {
+            max-width: 1400px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+
+        .header {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 20px;
+            margin-bottom: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+        }
+
+        .header h1 {
+            color: #4a5568;
+            font-size: 2.5rem;
+            margin-bottom: 10px;
+            text-align: center;
+        }
+
+        .connection-status {
+            text-align: center;
+            padding: 10px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+            font-weight: 600;
+        }
+
+        .connected {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .disconnected {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .nav-tabs {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+            margin-top: 20px;
+            flex-wrap: wrap;
+        }
+
+        .nav-tab {
+            padding: 12px 24px;
+            background: #4299e1;
+            color: white;
+            border: none;
+            border-radius: 8px;
+            cursor: pointer;
+            font-size: 16px;
+            font-weight: 600;
+            transition: all 0.3s ease;
+        }
+
+        .nav-tab:hover {
+            background: #3182ce;
+            transform: translateY(-2px);
+        }
+
+        .nav-tab.active {
+            background: #2d3748;
+        }
+
+        .tab-content {
+            background: rgba(255, 255, 255, 0.95);
+            backdrop-filter: blur(10px);
+            border-radius: 15px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.1);
+            display: none;
+        }
+
+        .tab-content.active {
+            display: block;
+        }
+
+        .upload-section {
+            text-align: center;
+            padding: 40px;
+            border: 3px dashed #cbd5e0;
+            border-radius: 15px;
+            margin-bottom: 30px;
+            transition: all 0.3s ease;
+        }
+
+        .upload-section:hover {
+            border-color: #4299e1;
+            background: rgba(66, 153, 225, 0.05);
+        }
+
+        .upload-input {
+            display: none;
+        }
+
+        .upload-btn, .camera-btn {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            padding: 15px 30px;
+            border: none;
+            border-radius: 10px;
+            font-size: 18px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            margin: 10px;
+        }
+
+        .upload-btn:hover, .camera-btn:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 10px 25px rgba(66, 153, 225, 0.4);
+        }
+
+        .camera-btn.active {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+        }
+
+        .camera-btn.stop {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+        }
+
+        .camera-section {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 30px;
+            margin-top: 30px;
+        }
+
+        .camera-display {
+            text-align: center;
+        }
+
+        .camera-frame {
+            width: 640px;
+            max-width: 500px;
+            height: 480px;
+            border-radius: 10px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            object-fit: contain; /* Ensures the image fits within the canvas */
+            background-color: #eee; /* Placeholder for empty canvas */
+        }
+
+        .camera-results {
+            background: #f7fafc;
+            padding: 20px;
+            border-radius: 10px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+
+        .detection-results {
+            margin-top: 30px;
+        }
+
+        .car-card {
+            background: white;
+            border-radius: 15px;
+            padding: 25px;
+            margin-bottom: 20px;
+            box-shadow: 0 5px 20px rgba(0, 0, 0, 0.1);
+            border-left: 5px solid #4299e1;
+        }
+
+        .car-header {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            margin-bottom: 20px;
+            padding-bottom: 15px;
+            border-bottom: 2px solid #e2e8f0;
+        }
+
+        .car-id {
+            font-size: 1.5rem;
+            font-weight: bold;
+            color: #2d3748;
+        }
+
+        .condition-percentage {
+            font-size: 2rem;
+            font-weight: bold;
+            padding: 10px 20px;
+            border-radius: 10px;
+            color: white;
+        }
+
+        .condition-good {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+        }
+
+        .condition-fair {
+            background: linear-gradient(135deg, #ed8936, #dd6b20);
+        }
+
+        .condition-poor {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+        }
+
+        .parts-list {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+            gap: 15px;
+            margin-top: 20px;
+        }
+
+        .part-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 15px;
+            background: #f7fafc;
+            border-radius: 10px;
+            border-left: 4px solid #cbd5e0;
+        }
+
+        .part-item.detected {
+            border-left-color: #48bb78;
+            background: #f0fff4;
+        }
+
+        .part-item.missing {
+            border-left-color: #f56565;
+            background: #fffaf0;
+        }
+
+        .part-name {
+            font-weight: 600;
+            color: #2d3748;
+        }
+
+        .part-status {
+            padding: 6px 12px;
+            border-radius: 6px;
+            font-size: 14px;
+            font-weight: 600;
+        }
+
+        .status-ok {
+            background: #c6f6d5;
+            color: #22543d;
+        }
+
+        .status-missing {
+            background: #fed7d7;
+            color: #742a2a;
+        }
+
+        .confirm-section {
+            margin-top: 30px;
+            padding: 20px;
+            background: #edf2f7;
+            border-radius: 10px;
+            text-align: center;
+        }
+
+        .confirm-btn {
+            background: linear-gradient(135deg, #48bb78, #38a169);
+            color: white;
+            padding: 15px 40px;
+            border: none;
+            border-radius: 10px;
+            font-size: 16px;
+            font-weight: 600;
+            cursor: pointer;
+            margin: 0 10px;
+            transition: all 0.3s ease;
+        }
+
+        .confirm-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 8px 20px rgba(72, 187, 120, 0.4);
+        }
+
+        .reject-btn {
+            background: linear-gradient(135deg, #f56565, #e53e3e);
+        }
+
+        .reject-btn:hover {
+            box-shadow: 0 8px 20px rgba(245, 101, 101, 0.4);
+        }
+
+        .progress-bar {
+            width: 100%;
+            height: 12px;
+            background: #e2e8f0;
+            border-radius: 6px;
+            overflow: hidden;
+            margin: 20px 0;
+        }
+
+        .progress-fill {
+            height: 100%;
+            background: linear-gradient(90deg, #4299e1, #48bb78);
+            transition: width 0.3s ease;
+        }
+
+        .stats-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+            gap: 20px;
+            margin-bottom: 30px;
+        }
+
+        .stat-card {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            text-align: center;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .stat-number {
+            font-size: 2.5rem;
+            font-weight: bold;
+            color: #4299e1;
+        }
+
+        .stat-label {
+            color: #718096;
+            margin-top: 5px;
+        }
+
+        .reports-table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-top: 20px;
+            background: white;
+            border-radius: 10px;
+            overflow: hidden;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+        }
+
+        .reports-table th {
+            background: linear-gradient(135deg, #4299e1, #3182ce);
+            color: white;
+            padding: 15px;
+            text-align: left;
+            font-weight: 600;
+        }
+
+        .reports-table td {
+            padding: 12px 15px;
+            border-bottom: 1px solid #e2e8f0;
+        }
+
+        .reports-table tr:hover {
+            background: #f7fafc;
+        }
+
+        .status-badge {
+            padding: 4px 8px;
+            border-radius: 4px;
+            font-size: 12px;
+            font-weight: 600;
+            text-transform: capitalize;
+        }
+        .status-badge.completed { background: #c6f6d5; color: #22543d; }
+        .status-badge.processing { background: #bee3f8; color: #2a4365; }
+        .status-badge.started { background: #ffeeda; color: #7b341e; }
+
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 600;
+            z-index: 1000;
+            transform: translateX(400px);
+            transition: transform 0.3s ease;
+        }
+
+        .notification.show {
+            transform: translateX(0);
+        }
+
+        .notification.success {
+            background: #48bb78;
+        }
+
+        .notification.error {
+            background: #f56565;
+        }
+
+        .notification.info {
+            background: #4299e1;
+        }
+
+        @keyframes fadeIn {
+            from { opacity: 0; transform: translateY(20px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        .fade-in {
+            animation: fadeIn 0.5s ease-out;
+        }
+
+        @media (max-width: 768px) {
+            .camera-section {
+                grid-template-columns: 1fr;
+            }
+            
+            .nav-tabs {
+                flex-direction: column;
+                align-items: center;
+            }
+            
+            .parts-list {
+                grid-template-columns: 1fr;
+            }
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="header">
+            <h1>🚗 Car Part Detection System</h1>
+            <div id="connectionStatus" class="connection-status disconnected">
+                🔴 Connecting to server...
+            </div>
+            <div class="nav-tabs">
+                <button class="nav-tab active" id="detection-tab" onclick="showTab('detection', event)">Video Detection</button>
+                <button class="nav-tab" id="camera-tab" onclick="showTab('camera', event)">Live Camera</button>
+                <button class="nav-tab" id="review-tab" onclick="showTab('review', event)">Review & Confirm</button>
+                <button class="nav-tab" id="reports-tab" onclick="showTab('reports', event)">Reports</button>
+            </div>
+        </div>
+
+        <div id="detection" class="tab-content active">
+            <div class="upload-section">
+                <h2>Upload Video for Analysis</h2>
+                <p style="margin: 15px 0; color: #718096;">Select a video file to start car part detection</p>
+                <input type="file" id="videoUpload" class="upload-input" accept="video/*" onchange="handleVideoUpload(event)">
+                <button class="upload-btn" onclick="document.getElementById('videoUpload').click()">
+                    📹 Choose Video File
+                </button>
+            </div>
+
+            <div id="processingStatus" style="display: none;">
+                <h3>Processing Video...</h3>
+                <div class="progress-bar">
+                    <div class="progress-fill" id="progressFill" style="width: 0%"></div>
+                </div>
+                <p id="progressText">Initializing...</p>
+            </div>
+
+            <div id="videoResults" class="detection-results">
+                </div>
+        </div>
+
+        <div id="camera" class="tab-content">
+            <div class="upload-section">
+                <h2>Live Camera Detection</h2>
+                <p style="margin: 15px 0; color: #718096;">Start real-time car part detection using your camera</p>
+                <button id="cameraBtn" class="camera-btn" onclick="toggleCamera()">
+                    📷 Start Camera Detection
+                </button>
+            </div>
+
+            <div id="cameraSection" class="camera-section" style="display: none;">
+                <div class="camera-display">
+                    <h3>Live Camera Feed</h3>
+                    <canvas id="cameraCanvas" class="camera-frame" width="640" height="480"></canvas>
+                    <p id="cameraStatus">Camera inactive</p>
+                </div>
+                <div class="camera-results">
+                    <h3>Real-time Detection Results</h3>
+                    <div id="liveResults">No detection results yet...</div>
+                </div>
+            </div>
+        </div>
+
+        <div id="review" class="tab-content">
+            <h2>Detection Results - Review & Confirm</h2>
+            <div id="detectionResults">
+                <p style="text-align: center; color: #718096; padding: 40px;">
+                    No detection results available. Please complete a video or camera detection first.
+                </p>
+            </div>
+        </div>
+
+        <div id="reports" class="tab-content">
+            <h2>Detection Reports</h2>
+            
+            <div class="stats-grid">
+                <div class="stat-card">
+                    <div class="stat-number" id="totalCars">0</div>
+                    <div class="stat-label">Total Cars Analyzed</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="avgCondition">0%</div>
+                    <div class="stat-label">Average Condition</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="completedReports">0</div>
+                    <div class="stat-label">Completed Reports</div>
+                </div>
+                <div class="stat-card">
+                    <div class="stat-number" id="totalDetections">0</div>
+                    <div class="stat-label">Total Detections</div>
+                </div>
+            </div>
+
+            <table class="reports-table">
+                <thead>
+                    <tr>
+                        <th>Detection ID</th>
+                        <th>Date</th>
+                        <th>Source</th>
+                        <th>Total Cars</th>
+                        <th>Confirmed Cars</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody id="reportsTableBody">
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                            Loading reports...
+                        </td>
+                    </tr>
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <script>
+        // Global variables
+        const API_BASE = 'http://localhost:5000';
+        let socket = null;
+        let currentDetectionId = null;
+        // Stores all detection results (from video or camera) for review
+        let detectionResultsMemory = {}; 
+        let cameraActive = false;
+        let mediaStream = null; // To store the camera stream
+
+        // Initialize Socket.IO connection
+        function initializeSocket() {
+            socket = io(API_BASE, {
+                transports: ['websocket'],
+                reconnection: true,
+                reconnectionAttempts: 10,
+                timeout: 20000,
+                pingInterval: 10000,
+                pingTimeout: 20000
+            });
+            
+            socket.on('connect', () => {
+                showConnectionStatus(true);
+                showNotification('Connected to server', 'success');
+                // Ensure review tab is updated on connection if there are results
+                if (currentDetectionId && detectionResultsMemory[currentDetectionId]) {
+                    displayDetectionResults(detectionResultsMemory[currentDetectionId]);
+                }
+            });
+            
+            setInterval(() => {
+                if (socket && socket.connected) {
+                    socket.emit('ping_check');
+                }
+            }, 5000);
+
+            socket.on('disconnect', (reason) => {
+                console.warn('Disconnected from server:', reason);
+                showConnectionStatus(false);
+                showNotification(`Disconnected: ${reason}`, 'error');
+                // Stop camera if disconnected
+                if (cameraActive) {
+                    stopCameraStream();
+                    document.getElementById('cameraBtn').textContent = '📷 Start Camera Detection';
+                    document.getElementById('cameraBtn').classList.remove('active', 'stop');
+                    document.getElementById('cameraSection').style.display = 'none';
+                    document.getElementById('cameraStatus').textContent = 'Camera inactive';
+                    cameraActive = false;
+                }
+            });
+            
+            socket.on('connected', (data) => {
+                console.log('Server message:', data.message);
+            });
+            
+            // Video detection events
+            socket.on('detection_progress', (data) => {
+                updateVideoProgress(data);
+            });
+            
+            socket.on('detection_complete', (data) => {
+                handleDetectionComplete(data);
+            });
+            
+            socket.on('detection_error', (data) => {
+                handleDetectionError(data);
+            });
+            
+            // Camera detection events
+            socket.on('camera_started', (data) => {
+                handleCameraStarted(data);
+            });
+            
+            socket.on('camera_frame', (data) => {
+                // console.log("Received frame", data); // Too many logs, comment out for performance
+                updateCameraFrame(data);
+                // Also update live results from camera_frame, as it includes the latest results
+                if (data.results) {
+                    updateLiveResults(data.results);
+                }
+            });
+
+            // camera_status provides summarized data, camera_frame provides visual and detailed.
+            // Using camera_frame for liveResults update is generally better.
+            socket.on('camera_status', (data) => {
+                // This event is more for high-level status, updateLiveResults handles detailed display
+                // console.log('Camera status update:', data);
+            });
+            
+            socket.on('camera_stopped', (data) => {
+                handleCameraStopped(data);
+            });
+        }
+
+        function showConnectionStatus(connected) {
+            const statusElement = document.getElementById('connectionStatus');
+            if (connected) {
+                statusElement.className = 'connection-status connected';
+                statusElement.innerHTML = '🟢 Connected to server';
+            } else {
+                statusElement.className = 'connection-status disconnected';
+                statusElement.innerHTML = '🔴 Disconnected from server';
+            }
+        }
+
+        function showNotification(message, type = 'info') {
+            const notification = document.createElement('div');
+            notification.className = `notification ${type}`;
+            notification.textContent = message;
+            document.body.appendChild(notification);
+            
+            setTimeout(() => notification.classList.add('show'), 100);
+            setTimeout(() => {
+                notification.classList.remove('show');
+                setTimeout(() => document.body.removeChild(notification), 300);
+            }, 3000);
+        }
+
+        function showTab(tabName, event = null) {
+            document.querySelectorAll('.tab-content').forEach(tab => {
+                tab.classList.remove('active');
+            });
+            document.querySelectorAll('.nav-tab').forEach(btn => {
+                btn.classList.remove('active');
+            });
+
+            document.getElementById(tabName).classList.add('active');
+            
+            // Safely add active class to the clicked tab
+            if (event && event.target) {
+                event.target.classList.add('active');
+            } else { // Fallback if called without event, e.g., from handleDetectionComplete
+                document.getElementById(`${tabName}-tab`).classList.add('active');
+            }
+
+            if (tabName === 'reports') {
+                loadReports();
+            } else if (tabName === 'review' && currentDetectionId && detectionResultsMemory[currentDetectionId]) {
+                 displayDetectionResults(detectionResultsMemory[currentDetectionId]);
+            }
+        }
+
+        async function handleVideoUpload(event) {
+            const file = event.target.files[0];
+            if (!file) return;
+
+            const formData = new FormData();
+            formData.append('video', file);
+
+            document.getElementById('processingStatus').style.display = 'block';
+            document.getElementById('progressFill').style.width = '0%';
+            document.getElementById('progressText').textContent = 'Uploading video...';
+            document.getElementById('videoResults').innerHTML = ''; // Clear previous video results
+
+            try {
+                const response = await fetch(`${API_BASE}/api/upload-video`, {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    currentDetectionId = result.detection_id;
+                    showNotification('Video uploaded successfully. Processing started...', 'success');
+                } else {
+                    throw new Error(result.error || 'Upload failed');
+                }
+            } catch (error) {
+                showNotification('Upload failed: ' + error.message, 'error');
+                document.getElementById('processingStatus').style.display = 'none';
+            }
+        }
+
+        function updateVideoProgress(data) {
+            if (data.detection_id !== currentDetectionId) return;
+            
+            const progressFill = document.getElementById('progressFill');
+            const progressText = document.getElementById('progressText');
+            
+            progressFill.style.width = data.progress + '%';
+            progressText.textContent = data.message || 'Processing...';
+            
+            if (data.current_results) {
+                updateLiveResults(data.current_results, 'videoResults'); // Update live results specific to video tab
+            }
+        }
+
+        function handleDetectionComplete(data) {
+            if (data.detection_id !== currentDetectionId) return;
+            
+            document.getElementById('progressText').textContent = 'Detection completed!';
+            detectionResultsMemory[data.detection_id] = data.results; // Store results in memory
+            
+            showNotification('Detection completed successfully! Results available in Review tab.', 'success');
+            
+            // Automatically switch to review tab after a short delay
+            setTimeout(() => {
+                showTab('review');
+                displayDetectionResults(data.results);
+                document.getElementById('processingStatus').style.display = 'none'; // Hide progress bar
+            }, 1000);
+        }
+
+        function handleDetectionError(data) {
+            showNotification('Detection error: ' + (data.error || 'Unknown error'), 'error');
+            document.getElementById('processingStatus').style.display = 'none';
+            // Stop camera if an error occurs during camera detection
+            if (cameraActive) {
+                stopCameraStream();
+                document.getElementById('cameraBtn').textContent = '📷 Start Camera Detection';
+                document.getElementById('cameraBtn').classList.remove('active', 'stop');
+                document.getElementById('cameraSection').style.display = 'none';
+                document.getElementById('cameraStatus').textContent = 'Camera inactive';
+                cameraActive = false;
+            }
+        }
+
+        async function toggleCamera() {
+            const btn = document.getElementById('cameraBtn');
+            const section = document.getElementById('cameraSection');
+            
+            if (!cameraActive) {
+                // Start camera
+                try {
+                    const response = await fetch(`${API_BASE}/api/camera/start`);
+                    const result = await response.json();
+                    
+                    if (response.ok) {
+                        currentDetectionId = result.detection_id;
+                        cameraActive = true;
+                        btn.textContent = '⏹️ Stop Camera';
+                        btn.classList.add('active', 'stop');
+                        section.style.display = 'grid';
+                        showNotification('Camera detection started', 'success');
+                    } else {
+                        throw new Error(result.error);
+                    }
+                } catch (error) {
+                    showNotification('Failed to start camera: ' + error.message, 'error');
+                }
+            } else {
+                // Stop camera
+                try {
+                    const response = await fetch(`${API_BASE}/api/camera/stop`);
+                    const result = await response.json();
+                    
+                    stopCameraStream(); // Stop local camera stream
+                    
+                    cameraActive = false;
+                    btn.textContent = '📷 Start Camera Detection';
+                    btn.classList.remove('active', 'stop');
+                    section.style.display = 'none';
+                    showNotification('Camera detection stopped', 'info');
+                } catch (error) {
+                    showNotification('Error stopping camera: ' + error.message, 'error');
+                }
+            }
+        }
+
+        // Function to stop the local camera stream
+        function stopCameraStream() {
+            if (mediaStream) {
+                mediaStream.getTracks().forEach(track => track.stop());
+                mediaStream = null;
+            }
+        }
+
+        function handleCameraStarted(data) {
+            document.getElementById('cameraStatus').textContent = 'Camera active - detecting cars...';
+        }
+
+        function updateCameraFrame(data) {
+            const canvas = document.getElementById('cameraCanvas');
+            const ctx = canvas.getContext('2d');
+            const image = new Image();
+
+            if (!data.frame || data.frame.length < 100) {
+                // console.warn("Empty or invalid base64 frame");
+                return;
+            }
+
+            image.onload = function () {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                // Draw image, scaling it to fit the canvas dimensions
+                ctx.drawImage(image, 0, 0, canvas.width, canvas.height);
+            };
+
+            image.onerror = function () {
+                console.error("Failed to load camera frame image");
+            };
+
+            image.src = 'data:image/jpeg;base64,' + data.frame;
+            document.getElementById('cameraStatus').textContent = 'Camera active - streaming...';
+        }
+
+        function handleCameraStopped(data) {
+            document.getElementById('cameraStatus').textContent = 'Camera stopped';
+            
+            if (data.final_results && Object.keys(data.final_results).length > 0) {
+                detectionResultsMemory[data.detection_id] = data.final_results;
+                showNotification('Camera detection completed. Results available in Review tab.', 'success');
+            } else {
+                showNotification('Camera detection stopped. No new results.', 'info');
+            }
+        }
+
+        function updateLiveResults(results, targetDivId = 'liveResults') {
+            const targetDiv = document.getElementById(targetDivId);
+            
+            if (!results || Object.keys(results).length === 0) {
+                targetDiv.innerHTML = 'No cars detected yet...';
+                return;
+            }
+            
+            let html = '';
+            Object.entries(results).forEach(([carKey, carData]) => {
+                // Check if carData and carData.parts exist
+                const detectedParts = carData.parts ? Object.values(carData.parts).filter(p => p.status === 1).length : 0;
+                const totalParts = carData.parts ? Object.keys(carData.parts).length : 0;
+                
+                html += `
+                    <div style="margin-bottom: 15px; padding: 15px; background: white; border-radius: 8px; border-left: 4px solid #4299e1;">
+                        <strong>Car ${carData.id}</strong> - ${carData.condition}% condition
+                        <br><small>${detectedParts}/${totalParts} parts detected</small>
+                        <div style="margin-top: 10px; font-size: 0.9em;">
+                            ${carData.parts ? Object.values(carData.parts).map(part => `
+                                <span style="display: inline-block; margin-right: 8px; margin-bottom: 5px; padding: 3px 6px; border-radius: 4px; font-size: 0.8em; background: ${part.status ? '#e6fffa' : '#ffe0b2'}; color: ${part.status ? '#2d3748' : '#e53e3e'};">
+                                    ${part.name.replace('_', ' ')}: ${part.status ? '✅' : '❌'}
+                                </span>
+                            `).join('') : ''}
+                        </div>
+                    </div>
+                `;
+            });
+            
+            targetDiv.innerHTML = html;
+        }
+
+        function displayDetectionResults(results) {
+            const resultsContainer = document.getElementById('detectionResults');
+            resultsContainer.innerHTML = ''; // Clear previous content
+
+            if (!results || Object.keys(results).length === 0) {
+                resultsContainer.innerHTML = `
+                    <p style="text-align: center; color: #718096; padding: 40px;">
+                        No cars detected in the analysis.
+                    </p>
+                `;
+                return;
+            }
+
+            Object.entries(results).forEach(([carKey, carData]) => {
+                const carCard = createCarCard(carKey, carData, currentDetectionId); // Pass detectionId
+                resultsContainer.appendChild(carCard);
+            });
+        }
+
+        function createCarCard(carKey, carData, detectionId) { // Added detectionId parameter
+            const card = document.createElement('div');
+            card.className = 'car-card fade-in';
+            card.setAttribute('data-car-db-id', `${detectionId}_${carKey}`); // Store the full car_db_id
+
+            const conditionClass = carData.condition >= 80 ? 'condition-good' : 
+                                  carData.condition >= 60 ? 'condition-fair' : 'condition-poor';
+            
+            const partsHtml = Object.entries(carData.parts).map(([partNameKey, partData]) => `
+                <div class="part-item ${partData.status ? 'detected' : 'missing'}">
+                    <span class="part-name">${partData.name.replace('_', ' ').toUpperCase()}</span>
+                    <span class="part-status ${partData.status ? 'status-ok' : 'status-missing'}">
+                        ${partData.status ? 'DETECTED' : 'NOT DETECTED'}
+                        ${partData.status && partData.confidence ? ` (${(partData.confidence * 100).toFixed(1)}%)` : ''}
+                    </span>
+                </div>
+            `).join('');
+            
+            card.innerHTML = `
+                <div class="car-header">
+                    <div class="car-id">Car ID: ${carData.id}</div>
+                    <div class="condition-percentage ${conditionClass}">
+                        ${carData.condition}%
+                    </div>
+                </div>
+                
+                <div class="parts-list">
+                    ${partsHtml}
+                </div>
+                
+                <div class="confirm-section">
+                    <h3>Confirm Detection Results</h3>
+                    <p>Please review the detection results and confirm if they are accurate.</p>
+                    <button class="confirm-btn" onclick="confirmCar('${detectionId}_${carKey}', true, this)">
+                        ✅ Confirm Results
+                    </button>
+                    <button class="confirm-btn reject-btn" onclick="confirmCar('${detectionId}_${carKey}', false, this)">
+                        ❌ Reject Results
+                    </button>
+                </div>
+            `;
+            
+            return card;
+        }
+
+        async function confirmCar(carDbId, isConfirmed, buttonElement) { // Added buttonElement
+            try {
+                const response = await fetch(`${API_BASE}/api/confirm-car`, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        car_db_id: carDbId,
+                        confirmed: isConfirmed
+                    })
+                });
+
+                const result = await response.json();
+                
+                if (response.ok) {
+                    showNotification(result.message, 'success');
+                    
+                    // Update the card to show confirmation status
+                    const card = buttonElement.closest('.car-card'); // Use buttonElement
+                    if (card) {
+                        const confirmSection = card.querySelector('.confirm-section');
+                        confirmSection.innerHTML = `
+                            <h3 style="color: ${isConfirmed ? '#38a169' : '#e53e3e'}">
+                                ${isConfirmed ? '✅ Results Confirmed' : '❌ Results Rejected'}
+                            </h3>
+                            <p>Action completed at ${new Date().toLocaleString()}</p>
+                        `;
+                        // Optionally disable further interaction or remove buttons
+                    }
+                } else {
+                    throw new Error(result.error);
+                }
+            } catch (error) {
+                showNotification('Confirmation failed: ' + error.message, 'error');
+            }
+        }
+
+        async function loadReports() {
+            try {
+                // Load detection reports (confirmed cars)
+                const reportsResponse = await fetch(`${API_BASE}/api/reports`);
+                const reportsData = await reportsResponse.json();
+                
+                // Load detection history (all detections)
+                const detectionsResponse = await fetch(`${API_BASE}/api/detections`);
+                const detectionsData = await detectionsResponse.json();
+                
+                updateReportsTable(detectionsData.detections);
+                updateStatistics(reportsData.reports, detectionsData.detections);
+                
+            } catch (error) {
+                showNotification('Failed to load reports: ' + error.message, 'error');
+                document.getElementById('reportsTableBody').innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                            Failed to load reports. Please try again.
+                        </td>
+                    </tr>
+                `;
+            }
+        }
+
+        function updateReportsTable(detections) {
+            const tableBody = document.getElementById('reportsTableBody');
+            tableBody.innerHTML = '';
+
+            if (!detections || detections.length === 0) {
+                tableBody.innerHTML = `
+                    <tr>
+                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                            No detection records found.
+                        </td>
+                    </tr>
+                `;
+                return;
+            }
+
+            detections.forEach(detection => {
+                const row = document.createElement('tr');
+                // Determine badge class based on status
+                const statusClass = detection.status ? detection.status.toLowerCase() : 'unknown';
+
+                row.innerHTML = `
+                    <td>${detection.id}</td>
+                    <td>${new Date(detection.timestamp).toLocaleString()}</td>
+                    <td>${detection.source_type.toUpperCase()}</td>
+                    <td>${detection.total_cars}</td>
+                    <td>${detection.confirmed_cars}</td>
+                    <td><span class="status-badge ${statusClass}">${detection.status}</span></td>
+                    <td>
+                        <button class="upload-btn" onclick="viewDetection('${detection.id}')">
+                            🔍 View
+                        </button>
+                    </td>
+                `;
+                tableBody.appendChild(row);
+            });
+        }
+
+        function updateStatistics(reports, detections) {
+            const totalCarsAnalyzed = reports.length; // Reports array contains confirmed cars
+            const totalDetectionsRecords = detections.length; // Detections array contains all detection events
+
+            let totalConditionSum = 0;
+            reports.forEach(r => {
+                if (typeof r.condition === 'number') {
+                    totalConditionSum += r.condition;
+                }
+            });
+            const avgCondition = totalCarsAnalyzed > 0
+                ? Math.round(totalConditionSum / totalCarsAnalyzed)
+                : 0;
+
+            document.getElementById('totalCars').textContent = totalCarsAnalyzed;
+            document.getElementById('avgCondition').textContent = `${avgCondition}%`;
+            document.getElementById('completedReports').textContent = totalCarsAnalyzed; // Confirmed cars = completed reports
+            document.getElementById('totalDetections').textContent = totalDetectionsRecords; // Total detection runs
+        }
+
+        async function viewDetection(detectionId) {
+            // Check if results are already in memory
+            if (detectionResultsMemory[detectionId]) {
+                displayDetectionResults(detectionResultsMemory[detectionId]);
+                showTab('review');
+                showNotification(`Viewing detection results for ID: ${detectionId} (from memory)`, 'info');
+            } else {
+                // If not in memory, fetch from backend (this would require an endpoint to get full detection results by ID)
+                try {
+                    const response = await fetch(`${API_BASE}/api/detection/${detectionId}`); // Hypothetical endpoint
+                    if (response.ok) {
+                        const data = await response.json();
+                        detectionResultsMemory[detectionId] = data.results;
+                        displayDetectionResults(data.results);
+                        showTab('review');
+                        showNotification(`Viewing detection results for ID: ${detectionId} (fetched)`, 'info');
+                    } else {
+                        throw new Error("Could not fetch detection results.");
+                    }
+                } catch (error) {
+                    showNotification('Detection results not found in memory and could not be fetched: ' + error.message, 'error');
+                }
+            }
+        }
+
+        // Initialize everything after DOM loads
+        document.addEventListener('DOMContentLoaded', () => {
+            initializeSocket();
+        });
+    </script>
+</body>
+</html>
