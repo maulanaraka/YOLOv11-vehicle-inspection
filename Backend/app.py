@@ -220,7 +220,7 @@ class CarTrackingProcessor:
             conn.commit()
 
     def update_car_and_parts_in_db(self, car_db_id, segmentation_data):
-        """Updates car and parts information in the database after segmentation."""
+        """Updates car and parts information in the database after segmentation, setting confirmed to true."""
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
@@ -233,8 +233,8 @@ class CarTrackingProcessor:
             total_parts = len(parts)
 
             cursor.execute('''
-                INSERT OR REPLACE INTO cars (id, detection_id, car_id, condition_percentage, car_image_path, detected_parts, total_parts, confirmed)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                INSERT OR REPLACE INTO cars (id, detection_id, car_id, condition_percentage, car_image_path, detected_parts, total_parts, confirmed, confirmation_time)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             ''', (
                 car_db_id,
                 self.detection_id,
@@ -243,7 +243,8 @@ class CarTrackingProcessor:
                 car_image_path,
                 detected_count,
                 total_parts,
-                False 
+                True, # Auto-confirm here
+                datetime.now().isoformat() # Set confirmation time
             ))
 
             cursor.execute('DELETE FROM parts WHERE car_db_id = ?', (car_db_id,))
@@ -565,7 +566,7 @@ def run_segmentation_on_image(image_path, car_id_int):
     """Helper function to run segmentation model on a given image path."""
     if image_path.startswith('Result/API/cars/') or image_path.startswith('Result/API/parts/'):
         relative_path = image_path.replace('Result/API/', '', 1) 
-        full_system_path = os.path.join(Config.OUTPUT_DIR, relative_path).replace('/', os.sep)
+        full_system_path = os.path.join(Config.OUTPUT_DIR, relative_path).replace('\\', os.sep)
     else:
         full_system_path = image_path 
 
@@ -674,6 +675,7 @@ def segment_captured_car():
             'timestamp': datetime.now().isoformat()
         }
 
+        # This will now automatically set 'confirmed' to true
         temp_processor.update_car_and_parts_in_db(car_db_id, {
             'id': car_id_int_from_frontend,
             'car_image_path': car_image_path_from_frontend, 
@@ -681,7 +683,7 @@ def segment_captured_car():
         })
         
         return jsonify({
-            "message": "Segmentation completed successfully",
+            "message": "Segmentation completed successfully and car confirmed",
             "detection_id": detection_id,
             "car_db_id": car_db_id,
             "results": {
@@ -745,65 +747,9 @@ def delete_car(car_db_id):
         return jsonify({"error": str(e)}), 500
 
 
-@app.route('/api/confirm-car', methods=['POST'])
-def confirm_car():
-    data = request.json
-    car_db_id = data.get('car_db_id')
-    confirmed = data.get('confirmed', False)
-    
-    if not car_db_id:
-        return jsonify({"error": "car_db_id required"}), 400
-    
-    try:
-        with get_db_connection() as conn:
-            cursor = conn.cursor()
-            cursor.execute('''
-                UPDATE cars 
-                SET confirmed = ?, confirmation_time = ?
-                WHERE id = ?
-            ''', (confirmed, datetime.now().isoformat(), car_db_id))
-            conn.commit()
-            
-            if cursor.rowcount == 0:
-                return jsonify({"error": "Car not found"}), 404
-            
-            detection_id_from_car_db_id = car_db_id.split('_')[0]
-            
-            cursor.execute('''
-                SELECT COUNT(*) FROM cars WHERE detection_id = ? AND confirmed = 1
-            ''', (detection_id_from_car_db_id,))
-            current_confirmed_count = cursor.fetchone()[0]
+# Removed the /api/confirm-car endpoint as it's no longer needed for explicit confirmation.
+# The confirmation is now handled automatically in update_car_and_parts_in_db.
 
-            cursor.execute('''
-                SELECT total_cars FROM detections WHERE id = ?
-            ''', (detection_id_from_car_db_id,))
-            total_cars_in_detection_row = cursor.fetchone()
-            total_cars_in_detection = total_cars_in_detection_row[0] if total_cars_in_detection_row else 0
-
-
-            new_status = 'processed' 
-            if total_cars_in_detection > 0:
-                if current_confirmed_count == total_cars_in_detection:
-                    new_status = 'completed_all_confirmed'
-                elif current_confirmed_count > 0:
-                    new_status = 'partial_confirmed'
-                
-            cursor.execute('''
-                UPDATE detections
-                SET status = ?
-                WHERE id = ?
-            ''', (new_status, detection_id_from_car_db_id))
-            conn.commit()
-
-        return jsonify({
-            "message": f"Car {'confirmed' if confirmed else 'rejected'} successfully",
-            "car_db_id": car_db_id,
-            "confirmed": confirmed
-        })
-        
-    except Exception as e:
-        print(f"[ERROR] Confirmation failed: {e}", exc_info=True)
-        return jsonify({"error": str(e)}), 500
 
 @app.route('/api/reports', methods=['GET'])
 def get_reports():
@@ -811,42 +757,28 @@ def get_reports():
         with get_db_connection() as conn:
             cursor = conn.cursor()
             
+            # Fetch all confirmed cars to be displayed in the reports table
             cursor.execute('''
-                SELECT c.*, d.timestamp as detection_date, d.source_type
+                SELECT c.id, c.car_id, c.detection_id, d.timestamp as detection_date, 
+                       c.condition_percentage, c.car_image_path, d.source_type
                 FROM cars c
                 JOIN detections d ON c.detection_id = d.id
                 WHERE c.confirmed = 1
-                ORDER BY d.timestamp DESC
+                ORDER BY d.timestamp DESC, c.car_id ASC
             ''')
             
             cars = cursor.fetchall()
             reports = []
             
             for car in cars:
-                cursor.execute('''
-                    SELECT * FROM parts WHERE car_db_id = ?
-                ''', (car['id'],))
-                parts = cursor.fetchall()
-                
-                parts_data = {}
-                for part in parts:
-                    parts_data[part['part_id']] = { # Use part_id (e.g., 'headlight_1') as key
-                        'name': part['part_name'],
-                        'status': part['status'],
-                        'confidence': part['confidence'],
-                        'image_path': part['image_path']
-                    }
-                
                 reports.append({
-                    'id': car['id'],
-                    'car_id': car['car_id'],
+                    'id': car['id'], # This is the car_db_id (detection_id_car_key)
+                    'car_id': car['car_id'], # This is the integer car ID (e.g., 1, 2, 3)
+                    'detection_id': car['detection_id'],
                     'detection_date': car['detection_date'],
-                    'confirmation_date': car['confirmation_time'],
                     'condition': car['condition_percentage'],
-                    'parts': parts_data,
-                    'source_type': car['source_type'],
-                    'status': 'confirmed',
-                    'car_image_path': car['car_image_path'] 
+                    'car_image_path': car['car_image_path'],
+                    'source_type': car['source_type']
                 })
         
         return jsonify({
@@ -992,7 +924,12 @@ def get_all_cars_for_review():
                 car_key_from_db = '_'.join(parts_of_car_db_id[1:]) 
 
                 # Determine status for frontend
-                status_for_frontend = 'Done' if car_record['condition_percentage'] is not None else 'Captured'
+                status_for_frontend = 'Done'
+                if car_record['condition_percentage'] is None:
+                    status_for_frontend = 'Captured'
+                elif car_record['confirmed']: # This will now always be true if segmented
+                    status_for_frontend = 'Confirmed'
+
 
                 cars_for_review_list.append({
                     'id': car_record['car_id'],
@@ -1000,6 +937,7 @@ def get_all_cars_for_review():
                     'car_key': car_key_from_db,
                     'car_image_path': car_record['car_image_path'],
                     'segmented': car_record['condition_percentage'] is not None, # True if segmentation results exist
+                    'confirmed': bool(car_record['confirmed']), # Include confirmed status
                     'segmentation_results': {
                         'id': car_record['car_id'],
                         'condition': car_record['condition_percentage'],

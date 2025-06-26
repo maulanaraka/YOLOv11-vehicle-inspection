@@ -389,6 +389,21 @@
             grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
             gap: 20px;
             margin-bottom: 30px;
+            /* Added for better reports tab layout */
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+            margin-top: 20px;
+        }
+
+        #reports {
+            margin-top: 30px;
+        }
+
+        .report-summary {
+            display: flex;
+            justify-content: space-between;
+            gap: 20px;
+            margin-bottom: 30px; /* Adds space between the summary and the table */
+            flex-wrap: wrap; /* Ensures the cards are responsive on smaller screens */
         }
 
         .stat-card {
@@ -397,17 +412,20 @@
             border-radius: 10px;
             text-align: center;
             box-shadow: 0 5px 15px rgba(0, 0, 0, 0.1);
+            width: calc(50% - 10px); /* Ensures two cards sit side by side */
+            min-width: 280px; /* Ensures the cards are not too narrow on smaller screens */
         }
 
         .stat-number {
             font-size: 2.5rem;
             font-weight: bold;
             color: #4299e1;
+            margin-bottom: 5px;
         }
 
         .stat-label {
             color: #718096;
-            margin-top: 5px;
+            font-size: 1rem;
         }
 
         .reports-table {
@@ -436,6 +454,7 @@
         .reports-table tr:hover {
             background: #f7fafc;
         }
+
 
         .status-badge {
             padding: 4px 8px;
@@ -617,10 +636,11 @@
             <div id="segmentationResultsDisplay" style="display: none;"></div> 
         </div>
 
-        <div id="reports" class="tab-content">
+        <<div id="reports" class="tab-content">
             <h2>Detection Reports</h2>
-            
-            <div class="stats-grid">
+
+            <!-- Summary Section (Total Cars Analyzed and Average Condition) -->
+            <div class="report-summary">
                 <div class="stat-card">
                     <div class="stat-number" id="totalCarsAnalyzed">0</div>
                     <div class="stat-label">Total Cars Analyzed</div>
@@ -631,26 +651,27 @@
                 </div>
             </div>
 
+            <!-- Reports Table -->
             <table class="reports-table">
                 <thead>
                     <tr>
-                        <th>Detection ID</th>
+                        <th>No</th>
+                        <th>Car ID</th>
                         <th>Date</th>
-                        <th>Source</th>
-                        <th>Cars Analyzed</th>
-                        <th>Status</th>
+                        <th>Condition (%)</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="reportsTableBody">
                     <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
+                        <td colspan="5" style="text-align: center; padding: 40px; color: #718096;">
                             Loading reports...
                         </td>
                     </tr>
                 </tbody>
             </table>
         </div>
+
     </div>
 
     <script>
@@ -780,8 +801,7 @@
             }
 
             if (tabName === 'reports') {
-                await loadAllCarsForReview(); // Ensure carsForReview is updated for stats
-                loadReports();
+                await loadReports(); // Load reports specific data
             } else if (tabName === 'review') {
                 await loadAllCarsForReview(); // Load all cars from DB when switching to review tab
                 displayReviewArea(); 
@@ -1028,6 +1048,7 @@
                             car_image_path: tempCapturedCar.car_image_path,
                             segmented: false, 
                             segmentation_results: null, 
+                            confirmed: false, // Assume newly captured are not confirmed
                             status: 'Captured'
                         });
                         lastCapturedCarInfo = tempCapturedCar; // Restore for display logic
@@ -1086,7 +1107,7 @@
                         <button class="action-btn view-results-btn" onclick="toggleSegmentationResults('${carDbId}')">View Results</button>
                         <button class="action-btn restart-seg-btn" onclick="startSegmentation('${carDbId}')">Restart Segmentation</button>
                     `;
-                    statusText = 'Done'; 
+                    statusText = 'Confirmed'; // Automatically confirmed if segmented
                     detailsHtml = `
                         <tr id="details_row_${carDbId}" class="hidden-details">
                             <td colspan="4">${createCarCardHtml(carData.car_key, carData.segmentation_results, carData.detection_id)}</td>
@@ -1152,7 +1173,8 @@
                     if (index !== -1) {
                         carsForReview[index].segmented = true;
                         carsForReview[index].segmentation_results = result.results[carToSegment.car_key];
-                        carsForReview[index].status = 'Done';
+                        carsForReview[index].status = 'Confirmed'; // Automatically set to Confirmed
+                        carsForReview[index].confirmed = true; // Set confirmed to true in local data
                     }
 
                     if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
@@ -1261,20 +1283,23 @@
         // --- Reports Tab Functions ---
         async function loadReports() {
             try {
-                // Fetch all detections to calculate total cars analyzed
-                const detectionsResponse = await fetch(`${API_BASE}/api/detections`);
-                const detectionsData = await detectionsResponse.json();
+                // Fetch all confirmed cars for the reports table
+                const response = await fetch(`${API_BASE}/api/reports`);
+                const result = await response.json();
+
+                if (!response.ok) {
+                    throw new Error(result.error || 'Failed to fetch reports.');
+                }
                 
-                // Use the comprehensive carsForReview for average condition
-                // This array should already be loaded when switching to the reports tab
-                updateStatistics(carsForReview, detectionsData.detections);
-                updateReportsTable(detectionsData.detections);
+                updateStatistics(result.reports); // Pass reports to update statistics
+
+                updateReportsTable(result.reports);
                 
             } catch (error) {
                 showNotification('Failed to load reports: ' + error.message, 'error');
                 document.getElementById('reportsTableBody').innerHTML = `
                     <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
+                        <td colspan="5" style="text-align: center; padding: 40px; color: #718096;">
                             Failed to load reports. Please try again.
                         </td>
                     </tr>
@@ -1282,33 +1307,32 @@
             }
         }
 
-        function updateReportsTable(detections) {
+        function updateReportsTable(reports) {
             const tableBody = document.getElementById('reportsTableBody');
             tableBody.innerHTML = '';
 
-            if (!detections || detections.length === 0) {
+            if (!reports || reports.length === 0) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
-                            No detection records found.
+                        <td colspan="5" style="text-align: center; padding: 40px; color: #718096;">
+                            No confirmed car reports found.
                         </td>
                     </tr>
                 `;
                 return;
             }
 
-            detections.forEach(detection => {
+            reports.forEach((report, index) => {
                 const row = document.createElement('tr');
-                const statusClass = detection.status ? detection.status.toLowerCase().replace(/_/g, '-') : 'unknown';
+                const carDbId = report.id; // car.id is already the car_db_id in the reports endpoint
 
                 row.innerHTML = `
-                    <td>${detection.id}</td>
-                    <td>${new Date(detection.timestamp).toLocaleString()}</td>
-                    <td>${detection.source_type.toUpperCase()}</td>
-                    <td>${detection.total_cars}</td>
-                    <td><span class="status-badge ${statusClass}">${detection.status.replace(/_/g, ' ')}</span></td>
+                    <td>${index + 1}</td>
+                    <td>${report.car_id}</td>
+                    <td>${new Date(report.detection_date).toLocaleString()}</td>
+                    <td>${report.condition}%</td>
                     <td>
-                        <button class="upload-btn" onclick="viewDetection('${detection.id}')">
+                        <button class="action-btn view-results-btn" onclick="viewCarInReviewTab('${carDbId}')">
                             🔍 View
                         </button>
                     </td>
@@ -1317,19 +1341,33 @@
             });
         }
 
-        function updateStatistics(allCarsForReview, allDetections) {
-            let totalCarsAnalyzed = 0;
-            allDetections.forEach(d => {
-                if (typeof d.total_cars === 'number') {
-                    totalCarsAnalyzed += d.total_cars;
+        // New function to view a specific car in the review tab
+        async function viewCarInReviewTab(carDbId) {
+            await loadAllCarsForReview(); // Ensure all cars are loaded into carsForReview array
+            showTab('review'); // Switch to the review tab
+            setTimeout(() => {
+                // Find the element in the review tab and scroll to it
+                const carElement = document.querySelector(`.car-card[data-car-db-id="${carDbId}"]`);
+                if (carElement) {
+                    carElement.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                    // Optionally, toggle details open
+                    toggleSegmentationResults(carDbId, true);
+                    showNotification(`Displaying details for Car ID: ${carDbId.split('_').pop()}`, 'info');
+                } else {
+                    showNotification('Car not found in review list.', 'error');
                 }
-            });
+            }, 500); // Give a small delay for the tab to become active and elements to render
+        }
+
+
+        function updateStatistics(confirmedCarsReports) {
+            let totalCarsAnalyzed = confirmedCarsReports.length;
 
             let totalConditionSum = 0;
             let segmentedCarCount = 0;
-            allCarsForReview.forEach(car => {
-                if (car.segmented && car.segmentation_results && typeof car.segmentation_results.condition === 'number') {
-                    totalConditionSum += car.segmentation_results.condition;
+            confirmedCarsReports.forEach(car => {
+                if (typeof car.condition === 'number') {
+                    totalConditionSum += car.condition;
                     segmentedCarCount++;
                 }
             });
@@ -1340,42 +1378,6 @@
 
             document.getElementById('totalCarsAnalyzed').textContent = totalCarsAnalyzed;
             document.getElementById('avgCondition').textContent = `${avgCondition}%`;
-            // Removed other statistics as requested
-        }
-
-        async function viewDetection(detectionId) {
-            try {
-                const response = await fetch(`${API_BASE}/api/detections/${detectionId}/details`);
-                const result = await response.json();
-
-                if (response.ok) {
-                    showNotification(`Loaded detailed report for Detection ID: ${detectionId}`, 'success');
-                    
-                    // Clear existing cars in review and populate *only* with cars from this report
-                    carsForReview = []; 
-                    const carsFromReport = Object.values(result.cars); 
-                    
-                    carsFromReport.forEach(carData => {
-                        carsForReview.push({
-                            id: carData.id,
-                            detection_id: carData.detection_id, 
-                            car_key: carData.car_key, 
-                            car_image_path: carData.car_image_path,
-                            segmented: true, 
-                            segmentation_results: carData, 
-                            status: 'Done' 
-                        });
-                    });
-
-                    showTab('review'); 
-
-                } else {
-                    throw new Error(result.error || 'Failed to load detection details');
-                }
-            } catch (error) {
-                showNotification('Error loading detection details: ' + error.message, 'error');
-                console.error('Error fetching detection details:', error);
-            }
         }
 
         document.addEventListener('DOMContentLoaded', async () => {
