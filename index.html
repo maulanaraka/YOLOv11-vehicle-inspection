@@ -622,20 +622,12 @@
             
             <div class="stats-grid">
                 <div class="stat-card">
-                    <div class="stat-number" id="totalCars">0</div>
+                    <div class="stat-number" id="totalCarsAnalyzed">0</div>
                     <div class="stat-label">Total Cars Analyzed</div>
                 </div>
                 <div class="stat-card">
                     <div class="stat-number" id="avgCondition">0%</div>
                     <div class="stat-label">Average Condition</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" id="completedReports">0</div>
-                    <div class="stat-label">Completed Reports</div>
-                </div>
-                <div class="stat-card">
-                    <div class="stat-number" id="totalDetections">0</div>
-                    <div class="stat-label">Total Detections</div>
                 </div>
             </div>
 
@@ -645,15 +637,14 @@
                         <th>Detection ID</th>
                         <th>Date</th>
                         <th>Source</th>
-                        <th>Total Cars</th>
-                        <th>Confirmed Cars</th>
+                        <th>Cars Analyzed</th>
                         <th>Status</th>
                         <th>Actions</th>
                     </tr>
                 </thead>
                 <tbody id="reportsTableBody">
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
                             Loading reports...
                         </td>
                     </tr>
@@ -789,6 +780,7 @@
             }
 
             if (tabName === 'reports') {
+                await loadAllCarsForReview(); // Ensure carsForReview is updated for stats
                 loadReports();
             } else if (tabName === 'review') {
                 await loadAllCarsForReview(); // Load all cars from DB when switching to review tab
@@ -1019,12 +1011,16 @@
                 carsForReview = result.cars; // Directly assign the fetched array
 
                 // Also add the last captured (but not yet segmented) car from local storage, if any
-                // This ensures temporary captures appear before they are in DB
+                // This ensures temporary captures appear before they are in DB, and handles duplicates.
                 const storedCarInfo = localStorage.getItem('lastCapturedCarInfo');
                 if (storedCarInfo) {
                     const tempCapturedCar = JSON.parse(storedCarInfo);
                     const carDbIdForTemp = `${tempCapturedCar.detection_id}_${tempCapturedCar.car_key}`;
-                    if (!carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForTemp)) {
+                    
+                    // Check if this car is already in the carsForReview (meaning it's segmented and in DB)
+                    const alreadyInDb = carsForReview.some(car => `${car.detection_id}_${car.car_key}` === carDbIdForTemp);
+                    
+                    if (!alreadyInDb) { // Only add if it's NOT already segmented and in DB
                         carsForReview.push({
                             id: tempCapturedCar.id,
                             detection_id: tempCapturedCar.detection_id,
@@ -1035,6 +1031,11 @@
                             status: 'Captured'
                         });
                         lastCapturedCarInfo = tempCapturedCar; // Restore for display logic
+                    } else {
+                        // If it's already in DB, clear lastCapturedCarInfo from localStorage
+                        // as it's no longer a pending unsegmented car.
+                        localStorage.removeItem('lastCapturedCarInfo');
+                        lastCapturedCarInfo = null;
                     }
                 }
 
@@ -1043,9 +1044,7 @@
                 document.getElementById('reviewInitialPrompt').textContent = 'Failed to load cars. Please try again.';
                 console.error("Error in loadAllCarsForReview:", error);
             } finally {
-                // The `displayReviewArea()` will be called by `showTab('review')`
-                // if `loadAllCarsForReview()` is triggered by a tab switch.
-                // If called independently, it needs to explicitly call displayReviewArea().
+                displayReviewArea(); // Always call display to update UI based on loaded data (or lack thereof)
             }
         }
 
@@ -1199,8 +1198,8 @@
                     
                     // If the deleted car was the last captured car, clear it from localStorage
                     if (lastCapturedCarInfo && `${lastCapturedCarInfo.detection_id}_${lastCapturedCarInfo.car_key}` === carDbId) {
-                        lastCapturedCarInfo = null;
                         localStorage.removeItem('lastCapturedCarInfo');
+                        lastCapturedCarInfo = null;
                     }
                 } else {
                     showNotification('Car not found in local review list after DB deletion.', 'info');
@@ -1259,25 +1258,23 @@
             `;
         }
 
-        // Removed confirmCar function as per requirement
-
         // --- Reports Tab Functions ---
         async function loadReports() {
             try {
-                const reportsResponse = await fetch(`${API_BASE}/api/reports`);
-                const reportsData = await reportsResponse.json();
-                
+                // Fetch all detections to calculate total cars analyzed
                 const detectionsResponse = await fetch(`${API_BASE}/api/detections`);
                 const detectionsData = await detectionsResponse.json();
                 
+                // Use the comprehensive carsForReview for average condition
+                // This array should already be loaded when switching to the reports tab
+                updateStatistics(carsForReview, detectionsData.detections);
                 updateReportsTable(detectionsData.detections);
-                updateStatistics(reportsData.reports, detectionsData.detections);
                 
             } catch (error) {
                 showNotification('Failed to load reports: ' + error.message, 'error');
                 document.getElementById('reportsTableBody').innerHTML = `
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
                             Failed to load reports. Please try again.
                         </td>
                     </tr>
@@ -1292,7 +1289,7 @@
             if (!detections || detections.length === 0) {
                 tableBody.innerHTML = `
                     <tr>
-                        <td colspan="7" style="text-align: center; padding: 40px; color: #718096;">
+                        <td colspan="6" style="text-align: center; padding: 40px; color: #718096;">
                             No detection records found.
                         </td>
                     </tr>
@@ -1309,7 +1306,6 @@
                     <td>${new Date(detection.timestamp).toLocaleString()}</td>
                     <td>${detection.source_type.toUpperCase()}</td>
                     <td>${detection.total_cars}</td>
-                    <td>${detection.confirmed_cars}</td>
                     <td><span class="status-badge ${statusClass}">${detection.status.replace(/_/g, ' ')}</span></td>
                     <td>
                         <button class="upload-btn" onclick="viewDetection('${detection.id}')">
@@ -1321,24 +1317,30 @@
             });
         }
 
-        function updateStatistics(reports, detections) {
-            const totalCarsConfirmed = reports.length; 
-            const totalDetectionsRecords = detections.length; 
-
-            let totalConditionSum = 0;
-            reports.forEach(r => {
-                if (typeof r.condition === 'number') {
-                    totalConditionSum += r.condition;
+        function updateStatistics(allCarsForReview, allDetections) {
+            let totalCarsAnalyzed = 0;
+            allDetections.forEach(d => {
+                if (typeof d.total_cars === 'number') {
+                    totalCarsAnalyzed += d.total_cars;
                 }
             });
-            const avgCondition = totalCarsConfirmed > 0
-                ? Math.round(totalConditionSum / totalCarsConfirmed)
+
+            let totalConditionSum = 0;
+            let segmentedCarCount = 0;
+            allCarsForReview.forEach(car => {
+                if (car.segmented && car.segmentation_results && typeof car.segmentation_results.condition === 'number') {
+                    totalConditionSum += car.segmentation_results.condition;
+                    segmentedCarCount++;
+                }
+            });
+            
+            const avgCondition = segmentedCarCount > 0
+                ? Math.round(totalConditionSum / segmentedCarCount)
                 : 0;
 
-            document.getElementById('totalCars').textContent = totalCarsConfirmed;
+            document.getElementById('totalCarsAnalyzed').textContent = totalCarsAnalyzed;
             document.getElementById('avgCondition').textContent = `${avgCondition}%`;
-            document.getElementById('completedReports').textContent = totalCarsConfirmed; 
-            document.getElementById('totalDetections').textContent = totalDetectionsRecords; 
+            // Removed other statistics as requested
         }
 
         async function viewDetection(detectionId) {
@@ -1354,8 +1356,6 @@
                     const carsFromReport = Object.values(result.cars); 
                     
                     carsFromReport.forEach(carData => {
-                        // The backend /api/detections/{id}/details now includes car_key and detection_id
-                        // so we can directly use carData.car_key and carData.detection_id
                         carsForReview.push({
                             id: carData.id,
                             detection_id: carData.detection_id, 
@@ -1391,11 +1391,15 @@
                 lastCapturedCarInfo = JSON.parse(storedCarInfo);
                 // The loadAllCarsForReview already handles adding this if it's not segmented
                 // Just display the prompt if it exists from a prior session
-                document.getElementById('capturedCarPrompt').style.display = 'block';
-                document.getElementById('capturedCarThumbnail').src = `/${lastCapturedCarInfo.car_image_path}`;
-                document.getElementById('capturedCarInfoText').textContent = `Car ID: ${lastCapturedCarInfo.id} (from previous session)`;
-                showNotification('Found a previously captured car for review.', 'info');
-                showTab('camera'); 
+                // We should re-evaluate this block, as loadAllCarsForReview should handle it.
+                // If lastCapturedCarInfo is null here, it means loadAllCarsForReview already processed it.
+                if (lastCapturedCarInfo) { // Only if it's still not null after loadAllCarsForReview
+                    document.getElementById('capturedCarPrompt').style.display = 'block';
+                    document.getElementById('capturedCarThumbnail').src = `/${lastCapturedCarInfo.car_image_path}`;
+                    document.getElementById('capturedCarInfoText').textContent = `Car ID: ${lastCapturedCarInfo.id} (from previous session)`;
+                    showNotification('Found a previously captured car for review.', 'info');
+                    showTab('camera'); 
+                }
             }
         });
     </script>
