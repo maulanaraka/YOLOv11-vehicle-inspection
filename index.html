@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Car Part Detection System</title>
+    <title>Car Inspection Detection System</title>
     <script src="https://cdn.socket.io/3.1.3/socket.io.min.js"></script>
     <style>
         * {
@@ -543,7 +543,7 @@
 <body>
     <div class="container">
         <div class="header">
-            <h1>🚗 Car Part Detection System</h1>
+            <h1>🚗 Car Inspection Detection System</h1>
             <div id="connectionStatus" class="connection-status disconnected">
                 🔴 Connecting to server...
             </div>
@@ -594,7 +594,7 @@
 
             <div id="capturedCarPrompt" class="captured-car-preview" style="display: none;">
                 <h3>Car Captured!</h3>
-                <p>A car has been detected and captured. What would you like to do?</p>
+                <p>_____________________________________</p>
                 <img id="capturedCarThumbnail" src="" alt="Captured Car Thumbnail" style="max-width: 250px; margin-top: 15px; border-radius: 8px;">
                 <p id="capturedCarInfoText" style="margin-top: 10px; font-weight: 600;"></p>
                 <button class="action-btn" onclick="restartDetection()">
